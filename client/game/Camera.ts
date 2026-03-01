@@ -1,59 +1,81 @@
 import { Container } from "pixi.js";
 
+const DEAD_ZONE_W_FRAC = 0.35;
+const DEAD_ZONE_H_FRAC = 0.3;
+const FOLLOW_SMOOTHING = 0.12;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 export class Camera {
-  private zoom = 1;
-  private readonly minZoom = 0.4;
-  private readonly maxZoom = 3.5;
-  private followEnabled = true;
+  private viewportW = 1;
+  private viewportH = 1;
+  private camCenterX = 0;
+  private camCenterY = 0;
 
-  constructor(private readonly worldContainer: Container) {}
-
-  getZoom(): number {
-    return this.zoom;
+  constructor(private readonly worldContainer: Container) {
+    this.worldContainer.scale.set(1);
   }
 
-  isFollowEnabled(): boolean {
-    return this.followEnabled;
+  setViewportSize(widthPx: number, heightPx: number): void {
+    this.viewportW = Math.max(1, widthPx);
+    this.viewportH = Math.max(1, heightPx);
   }
 
-  setFollowEnabled(enabled: boolean): void {
-    this.followEnabled = enabled;
-  }
+  updateFollow(
+    targetWorldPxX: number,
+    targetWorldPxY: number,
+    worldPxWidth: number,
+    worldPxHeight: number,
+  ): void {
+    const safeWorldW = Math.max(1, worldPxWidth);
+    const safeWorldH = Math.max(1, worldPxHeight);
 
-  pan(dx: number, dy: number): void {
-    this.worldContainer.position.x += dx;
-    this.worldContainer.position.y += dy;
-  }
+    const halfDZx = (this.viewportW * DEAD_ZONE_W_FRAC) * 0.5;
+    const halfDZy = (this.viewportH * DEAD_ZONE_H_FRAC) * 0.5;
 
-  setZoom(nextZoom: number, anchorScreenX?: number, anchorScreenY?: number): void {
-    const clamped = Math.max(this.minZoom, Math.min(this.maxZoom, nextZoom));
-    if (clamped === this.zoom) return;
+    const dx = targetWorldPxX - this.camCenterX;
+    const dy = targetWorldPxY - this.camCenterY;
 
-    if (anchorScreenX === undefined || anchorScreenY === undefined) {
-      this.zoom = clamped;
-      this.worldContainer.scale.set(this.zoom);
-      return;
+    let desiredCenterX = this.camCenterX;
+    let desiredCenterY = this.camCenterY;
+
+    if (dx > halfDZx) {
+      desiredCenterX = this.camCenterX + (dx - halfDZx);
+    } else if (dx < -halfDZx) {
+      desiredCenterX = this.camCenterX + (dx + halfDZx);
     }
 
-    const before = this.screenToWorldPx(anchorScreenX, anchorScreenY);
-    this.zoom = clamped;
-    this.worldContainer.scale.set(this.zoom);
-    this.worldContainer.position.x = anchorScreenX - before.x * this.zoom;
-    this.worldContainer.position.y = anchorScreenY - before.y * this.zoom;
+    if (dy > halfDZy) {
+      desiredCenterY = this.camCenterY + (dy - halfDZy);
+    } else if (dy < -halfDZy) {
+      desiredCenterY = this.camCenterY + (dy + halfDZy);
+    }
+
+    this.camCenterX += (desiredCenterX - this.camCenterX) * FOLLOW_SMOOTHING;
+    this.camCenterY += (desiredCenterY - this.camCenterY) * FOLLOW_SMOOTHING;
+
+    this.camCenterX = this.clampCenterAxis(this.camCenterX, this.viewportW, safeWorldW);
+    this.camCenterY = this.clampCenterAxis(this.camCenterY, this.viewportH, safeWorldH);
+
+    this.worldContainer.position.x = -this.camCenterX + this.viewportW * 0.5;
+    this.worldContainer.position.y = -this.camCenterY + this.viewportH * 0.5;
   }
 
-  follow(targetPxX: number, targetPxY: number, viewportW: number, viewportH: number): void {
-    if (!this.followEnabled) return;
-    this.worldContainer.position.set(
-      viewportW * 0.5 - targetPxX * this.zoom,
-      viewportH * 0.5 - targetPxY * this.zoom,
-    );
+  getViewRectWorldPx(): { x: number; y: number; w: number; h: number } {
+    return {
+      x: this.camCenterX - this.viewportW * 0.5,
+      y: this.camCenterY - this.viewportH * 0.5,
+      w: this.viewportW,
+      h: this.viewportH,
+    };
   }
 
   screenToWorldPx(screenX: number, screenY: number): { x: number; y: number } {
     return {
-      x: (screenX - this.worldContainer.position.x) / this.zoom,
-      y: (screenY - this.worldContainer.position.y) / this.zoom,
+      x: screenX - this.worldContainer.position.x,
+      y: screenY - this.worldContainer.position.y,
     };
   }
 
@@ -62,5 +84,15 @@ export class Camera {
       cellX: Math.floor(worldPxX / tileSize),
       cellY: Math.floor(worldPxY / tileSize),
     };
+  }
+
+  private clampCenterAxis(center: number, viewportSize: number, worldSize: number): number {
+    if (worldSize <= viewportSize) {
+      return worldSize * 0.5;
+    }
+
+    const minCenter = viewportSize * 0.5;
+    const maxCenter = worldSize - viewportSize * 0.5;
+    return clamp(center, minCenter, maxCenter);
   }
 }

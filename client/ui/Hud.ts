@@ -46,7 +46,7 @@ export class Hud {
       <div id="hud-actions" class="hud-block"></div>
       <div id="hud-lines" class="hud-block"></div>
       <div id="hud-error" class="hud-error"></div>
-      <div class="hud-help">LMB: move/select, RMB: stop, MMB or Space+Drag: pan, Wheel: zoom, F: toggle follow</div>
+      <div class="hud-help">LMB: move/select, RMB: stop, M: map, Esc: close map</div>
     `;
 
     container.appendChild(this.root);

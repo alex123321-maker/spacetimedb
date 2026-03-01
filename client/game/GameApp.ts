@@ -6,6 +6,7 @@ import { Selection } from "./Selection";
 import { WorldRenderer } from "./WorldRenderer";
 import { NetClient, type WorldSnapshot } from "../net/NetClient";
 import { Hud } from "../ui/Hud";
+import { MapOverlay } from "../ui/MapOverlay";
 
 const FIXED_SCALE = 1000;
 
@@ -24,6 +25,7 @@ export class GameApp {
   private interpolation!: Interpolation;
   private selection!: Selection;
   private hud!: Hud;
+  private mapOverlay!: MapOverlay;
   private input!: Input;
 
   private snapshot: WorldSnapshot;
@@ -71,6 +73,7 @@ export class GameApp {
     this.interpolation = new Interpolation();
     this.selection = new Selection();
     this.hud = new Hud(hudWrap, this.net, this.selection);
+    this.mapOverlay = new MapOverlay(this.mount);
 
     this.input = new Input({
       canvas: this.app.canvas,
@@ -79,6 +82,9 @@ export class GameApp {
       selection: this.selection,
       getSnapshot: () => this.snapshot,
       getTileSize: () => this.renderer.getTileSize(this.snapshot),
+      isMapOpen: () => this.mapOverlay.isOpen(),
+      toggleMap: () => this.mapOverlay.toggle(),
+      closeMap: () => this.mapOverlay.close(),
     });
 
     this.net.onStoreChanged(() => {
@@ -100,6 +106,12 @@ export class GameApp {
   private renderFrame(): void {
     const snapshot = this.snapshot;
     const tileSize = this.renderer.getTileSize(snapshot);
+    const worldWidthCells = snapshot.worldConfig?.worldWidth ?? 128;
+    const worldHeightCells = snapshot.worldConfig?.worldHeight ?? 128;
+    const worldWidthPx = worldWidthCells * tileSize;
+    const worldHeightPx = worldHeightCells * tileSize;
+
+    this.camera.setViewportSize(this.app.screen.width, this.app.screen.height);
 
     this.interpolation.update(snapshot.players, tileSize);
 
@@ -116,19 +128,20 @@ export class GameApp {
       ? snapshot.players.find((player) => player.playerId === snapshot.myPlayerId) ?? null
       : null;
 
-    if (this.camera.isFollowEnabled() && myPlayer) {
+    if (myPlayer) {
       const p = interpolated.get(myPlayer.playerId);
       const px = p?.x ?? (Number(myPlayer.posX) / FIXED_SCALE) * tileSize;
       const py = p?.y ?? (Number(myPlayer.posY) / FIXED_SCALE) * tileSize;
-      this.camera.follow(
+      this.camera.updateFollow(
         px + tileSize * 0.5,
         py + tileSize * 0.5,
-        this.app.screen.width,
-        this.app.screen.height,
+        worldWidthPx,
+        worldHeightPx,
       );
     }
 
     this.renderer.render(snapshot, interpolated, this.selection.selectedGeneratorId);
+    this.mapOverlay.render(snapshot, this.camera.getViewRectWorldPx(), tileSize);
   }
 
   private computeRenderTick(snapshot: WorldSnapshot): number {

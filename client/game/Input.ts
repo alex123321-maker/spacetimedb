@@ -9,13 +9,14 @@ interface InputOptions {
   selection: Selection;
   getSnapshot: () => WorldSnapshot;
   getTileSize: () => number;
+  isMapOpen: () => boolean;
+  toggleMap: () => void;
+  closeMap: () => void;
 }
 
 export class Input {
   private pointerDown = false;
   private dragging = false;
-  private dragPanMode = false;
-  private spacePressed = false;
   private lastX = 0;
   private lastY = 0;
 
@@ -31,32 +32,30 @@ export class Input {
     });
 
     window.addEventListener("keydown", this.onKeyDown);
-    window.addEventListener("keyup", this.onKeyUp);
 
     canvas.addEventListener("pointerdown", this.onPointerDown);
     canvas.addEventListener("pointermove", this.onPointerMove);
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointerleave", this.onPointerUp);
-    canvas.addEventListener("wheel", this.onWheel, { passive: false });
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
-    if (event.code === "Space") {
-      this.spacePressed = true;
+    if (event.code === "KeyM") {
+      event.preventDefault();
+      this.options.toggleMap();
       return;
     }
-    if (event.code === "KeyF") {
-      this.options.camera.setFollowEnabled(!this.options.camera.isFollowEnabled());
-    }
-  };
 
-  private onKeyUp = (event: KeyboardEvent): void => {
-    if (event.code === "Space") {
-      this.spacePressed = false;
+    if (event.code === "Escape") {
+      this.options.closeMap();
     }
   };
 
   private onPointerDown = (event: PointerEvent): void => {
+    if (this.options.isMapOpen()) {
+      return;
+    }
+
     const point = this.toCanvasPoint(event);
     this.pointerDown = true;
     this.dragging = false;
@@ -71,15 +70,11 @@ export class Input {
       }
       return;
     }
-
-    this.dragPanMode = event.button === 1 || (event.button === 0 && this.spacePressed);
-    if (this.dragPanMode) {
-      this.options.camera.setFollowEnabled(false);
-    }
   };
 
   private onPointerMove = (event: PointerEvent): void => {
     if (!this.pointerDown) return;
+    if (this.options.isMapOpen()) return;
 
     const point = this.toCanvasPoint(event);
     const dx = point.x - this.lastX;
@@ -87,40 +82,26 @@ export class Input {
     this.lastX = point.x;
     this.lastY = point.y;
 
-    if (!this.dragPanMode) {
-      if (Math.abs(dx) + Math.abs(dy) > 4) {
-        this.dragging = true;
-      }
-      return;
+    if (Math.abs(dx) + Math.abs(dy) > 4) {
+      this.dragging = true;
     }
-
-    this.dragging = true;
-    this.options.camera.pan(dx, dy);
   };
 
   private onPointerUp = (event: PointerEvent): void => {
     if (!this.pointerDown) return;
 
-    const wasPanMode = this.dragPanMode;
     this.pointerDown = false;
-    this.dragPanMode = false;
 
-    if (event.button !== 0 || this.dragging || wasPanMode) {
+    if (this.options.isMapOpen()) {
+      return;
+    }
+
+    if (event.button !== 0 || this.dragging) {
       return;
     }
 
     const point = this.toCanvasPoint(event);
     this.handleLeftClick(point.x, point.y);
-  };
-
-  private onWheel = (event: WheelEvent): void => {
-    event.preventDefault();
-    const point = this.toCanvasPoint(event);
-    this.options.camera.setFollowEnabled(false);
-
-    const current = this.options.camera.getZoom();
-    const factor = event.deltaY < 0 ? 1.1 : 0.9;
-    this.options.camera.setZoom(current * factor, point.x, point.y);
   };
 
   private handleLeftClick(screenX: number, screenY: number): void {
@@ -176,7 +157,7 @@ export class Input {
     return best ? { id: best.id } : null;
   }
 
-  private toCanvasPoint(event: MouseEvent | PointerEvent | WheelEvent): { x: number; y: number } {
+  private toCanvasPoint(event: MouseEvent | PointerEvent): { x: number; y: number } {
     const rect = this.options.canvas.getBoundingClientRect();
     return {
       x: event.clientX - rect.left,
