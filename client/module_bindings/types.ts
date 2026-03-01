@@ -10,6 +10,17 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const Generator = __t.object("Generator", {
+  id: __t.string(),
+  x: __t.i32(),
+  y: __t.i32(),
+  spawnTick: __t.u64(),
+  expireTick: __t.u64(),
+  ownerPlayerId: __t.string(),
+  state: __t.string(),
+});
+export type Generator = __Infer<typeof Generator>;
+
 export const Obstacle = __t.object("Obstacle", {
   id: __t.string(),
   x: __t.i32(),
@@ -45,11 +56,29 @@ export const PlayerSession = __t.object("PlayerSession", {
 });
 export type PlayerSession = __Infer<typeof PlayerSession>;
 
+export const SpawnMarker = __t.object("SpawnMarker", {
+  id: __t.string(),
+  x: __t.i32(),
+  y: __t.i32(),
+  spawnTick: __t.u64(),
+});
+export type SpawnMarker = __Infer<typeof SpawnMarker>;
+
 export const TickSchedule = __t.object("TickSchedule", {
   scheduledId: __t.u64(),
   scheduledAt: __t.scheduleAt(),
 });
 export type TickSchedule = __Infer<typeof TickSchedule>;
+
+export const WorldConfig = __t.object("WorldConfig", {
+  id: __t.string(),
+  ticksPerDay: __t.u32(),
+  waveEveryDays: __t.u32(),
+  markerLeadDays: __t.u32(),
+  generatorLifeDays: __t.u32(),
+  waveSize: __t.u32(),
+});
+export type WorldConfig = __Infer<typeof WorldConfig>;
 
 export const WorldState = __t.object("WorldState", {
   id: __t.string(),

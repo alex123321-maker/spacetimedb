@@ -41,15 +41,29 @@ import JoinPlayerReducer from "./join_player_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import GeneratorRow from "./generator_table";
 import ObstacleRow from "./obstacle_table";
 import PendingActionRow from "./pending_action_table";
 import PlayerRow from "./player_table";
+import SpawnMarkerRow from "./spawn_marker_table";
+import WorldConfigRow from "./world_config_table";
 import WorldStateRow from "./world_state_table";
 
 /** Type-only namespace exports for generated type groups. */
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  generator: __table({
+    name: 'generator',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'generator_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, GeneratorRow),
   obstacle: __table({
     name: 'obstacle',
     indexes: [
@@ -83,6 +97,28 @@ const tablesSchema = __schema({
       { name: 'player_player_id_key', constraint: 'unique', columns: ['playerId'] },
     ],
   }, PlayerRow),
+  spawnMarker: __table({
+    name: 'spawn_marker',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'spawn_marker_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, SpawnMarkerRow),
+  worldConfig: __table({
+    name: 'world_config',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'world_config_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, WorldConfigRow),
   worldState: __table({
     name: 'world_state',
     indexes: [

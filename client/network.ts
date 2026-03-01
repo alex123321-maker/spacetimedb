@@ -23,6 +23,23 @@ export interface ObstacleCell {
   y: number;
 }
 
+export interface SpawnMarkerSnapshot {
+  id: string;
+  x: number;
+  y: number;
+  spawnTick: bigint;
+}
+
+export interface GeneratorSnapshot {
+  id: string;
+  x: number;
+  y: number;
+  spawnTick: bigint;
+  expireTick: bigint;
+  ownerPlayerId: string;
+  state: string;
+}
+
 export interface MoveCommandEnvelope {
   type: "Move";
   tick: number;
@@ -61,7 +78,13 @@ export class SpacetimeClient {
             const current = this.getOwnPlayer();
             if (current) onPlayer(current);
           })
-          .subscribe([tables.player, tables.worldState, tables.obstacle]);
+          .subscribe([
+            tables.player,
+            tables.worldState,
+            tables.obstacle,
+            tables.spawnMarker,
+            tables.generator
+          ]);
 
         conn.db.player.onInsert(() => {
           const current = this.getOwnPlayer();
@@ -106,7 +129,7 @@ export class SpacetimeClient {
     return message;
   }
 
-  private getCurrentTick(): number {
+  getCurrentTick(): number {
     if (!this.conn) return 0;
     const world = Array.from(this.conn.db.worldState.iter())[0] as
       | PlainObject
@@ -151,6 +174,48 @@ export class SpacetimeClient {
       return 0;
     });
     return obstacles;
+  }
+
+  getSpawnMarkers(): SpawnMarkerSnapshot[] {
+    if (!this.conn) return [];
+    const rows = Array.from(this.conn.db.spawnMarker.iter()) as PlainObject[];
+    const markers = rows.map((row) => ({
+      id: readField<string>(row, "id") ?? "",
+      x: readField<number>(row, "x") ?? 0,
+      y: readField<number>(row, "y") ?? 0,
+      spawnTick: readField<bigint>(row, "spawnTick", "spawn_tick") ?? 0n
+    }));
+
+    markers.sort((a, b) => {
+      if (a.spawnTick !== b.spawnTick) return a.spawnTick < b.spawnTick ? -1 : 1;
+      if (a.id < b.id) return -1;
+      if (a.id > b.id) return 1;
+      return 0;
+    });
+    return markers;
+  }
+
+  getGenerators(): GeneratorSnapshot[] {
+    if (!this.conn) return [];
+    const rows = Array.from(this.conn.db.generator.iter()) as PlainObject[];
+    const generators = rows.map((row) => ({
+      id: readField<string>(row, "id") ?? "",
+      x: readField<number>(row, "x") ?? 0,
+      y: readField<number>(row, "y") ?? 0,
+      spawnTick: readField<bigint>(row, "spawnTick", "spawn_tick") ?? 0n,
+      expireTick: readField<bigint>(row, "expireTick", "expire_tick") ?? 0n,
+      ownerPlayerId:
+        readField<string>(row, "ownerPlayerId", "owner_player_id") ?? "",
+      state: readField<string>(row, "state") ?? "neutral"
+    }));
+
+    generators.sort((a, b) => {
+      if (a.expireTick !== b.expireTick) return a.expireTick < b.expireTick ? -1 : 1;
+      if (a.id < b.id) return -1;
+      if (a.id > b.id) return 1;
+      return 0;
+    });
+    return generators;
   }
 
   private callReducer(names: string[], args?: PlainObject): void {
