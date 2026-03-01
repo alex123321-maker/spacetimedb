@@ -15,6 +15,8 @@ export interface PlayerSnapshot {
   posX: bigint;
   posY: bigint;
   lastProcessedTick: bigint;
+  rootGeneratorId: string;
+  rootMoveAvailableAtTick: bigint;
 }
 
 export interface ObstacleCell {
@@ -38,6 +40,20 @@ export interface GeneratorSnapshot {
   expireTick: bigint;
   ownerPlayerId: string;
   state: string;
+}
+
+export interface RootNodeSnapshot {
+  playerId: string;
+  generatorId: string;
+  placedAtTick: bigint;
+}
+
+export interface RootRelocationSnapshot {
+  playerId: string;
+  fromGeneratorId: string;
+  toGeneratorId: string;
+  startTick: bigint;
+  finishTick: bigint;
 }
 
 export interface MoveCommandEnvelope {
@@ -83,7 +99,9 @@ export class SpacetimeClient {
             tables.worldState,
             tables.obstacle,
             tables.spawnMarker,
-            tables.generator
+            tables.generator,
+            tables.rootNode,
+            tables.rootRelocation
           ]);
 
         conn.db.player.onInsert(() => {
@@ -129,6 +147,20 @@ export class SpacetimeClient {
     return message;
   }
 
+  placeRoot(generatorId: string): void {
+    if (!generatorId) {
+      throw new Error("generatorId is required");
+    }
+    this.callReducer(["placeRoot", "place_root"], { generatorId });
+  }
+
+  startMoveRoot(newGeneratorId: string): void {
+    if (!newGeneratorId) {
+      throw new Error("newGeneratorId is required");
+    }
+    this.callReducer(["startMoveRoot", "start_move_root"], { newGeneratorId });
+  }
+
   getCurrentTick(): number {
     if (!this.conn) return 0;
     const world = Array.from(this.conn.db.worldState.iter())[0] as
@@ -157,7 +189,15 @@ export class SpacetimeClient {
       posX: readField<bigint>(row, "posX", "pos_x") ?? 0n,
       posY: readField<bigint>(row, "posY", "pos_y") ?? 0n,
       lastProcessedTick:
-        readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n
+        readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n,
+      rootGeneratorId:
+        readField<string>(row, "rootGeneratorId", "root_generator_id") ?? "",
+      rootMoveAvailableAtTick:
+        readField<bigint>(
+          row,
+          "rootMoveAvailableAtTick",
+          "root_move_available_at_tick"
+        ) ?? 0n
     };
   }
 
@@ -169,7 +209,15 @@ export class SpacetimeClient {
       posX: readField<bigint>(row, "posX", "pos_x") ?? 0n,
       posY: readField<bigint>(row, "posY", "pos_y") ?? 0n,
       lastProcessedTick:
-        readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n
+        readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n,
+      rootGeneratorId:
+        readField<string>(row, "rootGeneratorId", "root_generator_id") ?? "",
+      rootMoveAvailableAtTick:
+        readField<bigint>(
+          row,
+          "rootMoveAvailableAtTick",
+          "root_move_available_at_tick"
+        ) ?? 0n
     }));
 
     players.sort((a, b) => {
@@ -239,6 +287,43 @@ export class SpacetimeClient {
       return 0;
     });
     return generators;
+  }
+
+  getRootNodes(): RootNodeSnapshot[] {
+    if (!this.conn) return [];
+    const rows = Array.from(this.conn.db.rootNode.iter()) as PlainObject[];
+    const roots = rows.map((row) => ({
+      playerId: readField<string>(row, "playerId", "player_id") ?? "",
+      generatorId: readField<string>(row, "generatorId", "generator_id") ?? "",
+      placedAtTick: readField<bigint>(row, "placedAtTick", "placed_at_tick") ?? 0n
+    }));
+
+    roots.sort((a, b) => {
+      if (a.playerId < b.playerId) return -1;
+      if (a.playerId > b.playerId) return 1;
+      return 0;
+    });
+    return roots;
+  }
+
+  getRootRelocations(): RootRelocationSnapshot[] {
+    if (!this.conn) return [];
+    const rows = Array.from(this.conn.db.rootRelocation.iter()) as PlainObject[];
+    const relocations = rows.map((row) => ({
+      playerId: readField<string>(row, "playerId", "player_id") ?? "",
+      fromGeneratorId:
+        readField<string>(row, "fromGeneratorId", "from_generator_id") ?? "",
+      toGeneratorId: readField<string>(row, "toGeneratorId", "to_generator_id") ?? "",
+      startTick: readField<bigint>(row, "startTick", "start_tick") ?? 0n,
+      finishTick: readField<bigint>(row, "finishTick", "finish_tick") ?? 0n
+    }));
+
+    relocations.sort((a, b) => {
+      if (a.playerId < b.playerId) return -1;
+      if (a.playerId > b.playerId) return 1;
+      return 0;
+    });
+    return relocations;
   }
 
   private callReducer(names: string[], args?: PlainObject): void {

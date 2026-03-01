@@ -9,8 +9,14 @@ import { type Infer as __Infer } from "spacetimedb";
 import ApplyMoveReducer from "../apply_move_reducer";
 import EnqueueActionReducer from "../enqueue_action_reducer";
 import JoinPlayerReducer from "../join_player_reducer";
+import PlaceRootReducer from "../place_root_reducer";
+import StartMoveRootReducer from "../start_move_root_reducer";
+import UpdateWorldConfigReducer from "../update_world_config_reducer";
 
 export type ApplyMoveParams = __Infer<typeof ApplyMoveReducer>;
 export type EnqueueActionParams = __Infer<typeof EnqueueActionReducer>;
 export type JoinPlayerParams = __Infer<typeof JoinPlayerReducer>;
+export type PlaceRootParams = __Infer<typeof PlaceRootReducer>;
+export type StartMoveRootParams = __Infer<typeof StartMoveRootReducer>;
+export type UpdateWorldConfigParams = __Infer<typeof UpdateWorldConfigReducer>;
 

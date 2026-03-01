@@ -15,4 +15,6 @@ export default __t.row({
   posX: __t.i64().name("pos_x"),
   posY: __t.i64().name("pos_y"),
   lastProcessedTick: __t.u64().name("last_processed_tick"),
+  rootGeneratorId: __t.string().name("root_generator_id"),
+  rootMoveAvailableAtTick: __t.u64().name("root_move_available_at_tick"),
 });

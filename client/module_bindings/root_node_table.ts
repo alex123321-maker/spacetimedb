@@ -11,11 +11,7 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  id: __t.string().primaryKey(),
-  ticksPerDay: __t.u32().name("ticks_per_day"),
-  ticksPerMinute: __t.u32().name("ticks_per_minute"),
-  waveEveryDays: __t.u32().name("wave_every_days"),
-  markerLeadDays: __t.u32().name("marker_lead_days"),
-  generatorLifeDays: __t.u32().name("generator_life_days"),
-  waveSize: __t.u32().name("wave_size"),
+  playerId: __t.string().primaryKey().name("player_id"),
+  generatorId: __t.string().name("generator_id"),
+  placedAtTick: __t.u64().name("placed_at_tick"),
 });

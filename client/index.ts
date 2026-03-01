@@ -23,6 +23,7 @@ app.innerHTML = `
       <p class="help">Move: WASD / Arrow keys. Open this page in two browser profiles to test multiplayer visibility.</p>
       <div id="status">Connecting...</div>
       <div id="tick">tick: 0</div>
+      <div id="root-status"></div>
     </section>
     <section class="panel">
       <h2>World Map</h2>
@@ -38,6 +39,10 @@ app.innerHTML = `
       <pre id="generators-list"></pre>
     </section>
     <section class="panel">
+      <h2>Root Actions</h2>
+      <div id="generator-actions"></div>
+    </section>
+    <section class="panel">
       <h2>Spawn Markers</h2>
       <pre id="markers-list"></pre>
     </section>
@@ -50,12 +55,86 @@ function setText(id: string, text: string): void {
   el.textContent = text;
 }
 
+function setHtml(id: string, html: string): void {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = html;
+}
+
+function renderRootStatus(
+  ownId: string | null,
+  currentTick: number,
+  rootGeneratorId: string,
+  rootMoveAvailableAtTick: bigint
+): void {
+  if (!ownId) {
+    setText("root-status", "root: waiting for identity...");
+    return;
+  }
+
+  const relocation = client
+    .getRootRelocations()
+    .find((item) => item.playerId === ownId);
+
+  const now = BigInt(currentTick);
+  const cooldownLeft =
+    rootMoveAvailableAtTick > now ? rootMoveAvailableAtTick - now : 0n;
+
+  if (relocation) {
+    const finishIn =
+      relocation.finishTick > now ? relocation.finishTick - now : 0n;
+    setText(
+      "root-status",
+      `root=${rootGeneratorId || "none"} | relocating ${relocation.fromGeneratorId} -> ${relocation.toGeneratorId} | finishesIn=${finishIn.toString()} ticks | cooldownLeft=${cooldownLeft.toString()} ticks`
+    );
+    return;
+  }
+
+  setText(
+    "root-status",
+    `root=${rootGeneratorId || "none"} | cooldownLeft=${cooldownLeft.toString()} ticks`
+  );
+}
+
+function renderGeneratorActions(ownId: string | null): void {
+  const generators = client.getGenerators();
+  if (!ownId || generators.length === 0) {
+    setHtml("generator-actions", "<p class=\"help\">No generators available yet.</p>");
+    return;
+  }
+
+  const rows = generators
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((generator) => {
+      const owner = generator.ownerPlayerId || "none";
+      return `
+        <div class="action-row">
+          <code>${generator.id}</code>
+          <span>cell=(${generator.x},${generator.y}) state=${generator.state} owner=${owner}</span>
+          <button data-action="place-root" data-generator-id="${generator.id}">Place Root</button>
+          <button data-action="move-root" data-generator-id="${generator.id}">Move Root</button>
+        </div>
+      `;
+    })
+    .join("");
+
+  setHtml("generator-actions", rows);
+}
+
 function render(): void {
   const ownId = client.getOwnPlayerId();
   const currentTick = client.getCurrentTick();
-  const players = client
-    .getPlayers()
-    .map((player) => toPlayerCell(player.playerId, player.posX, player.posY, ownId));
+  const players = client.getPlayers().map((player) =>
+    toPlayerCell(
+      player.playerId,
+      player.posX,
+      player.posY,
+      player.rootGeneratorId,
+      player.rootMoveAvailableAtTick,
+      ownId
+    )
+  );
   const me = players.find((player) => player.isSelf);
 
   setText("status", ownId ? `connected as ${ownId}` : "connected");
@@ -65,6 +144,7 @@ function render(): void {
   setText("markers-list", renderSpawnMarkersList(client.getSpawnMarkers()));
 
   if (me) {
+    renderRootStatus(ownId, currentTick, me.rootGeneratorId, me.rootMoveAvailableAtTick);
     setText(
       "world-map",
       renderWorldMap(
@@ -77,12 +157,37 @@ function render(): void {
       )
     );
   } else {
+    setText("root-status", "root: waiting for own player row...");
     setText("world-map", "Waiting for own player row...");
   }
+
+  renderGeneratorActions(ownId);
 }
 
 client.connect(() => {
   render();
+});
+
+app.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) return;
+  const action = target.dataset.action;
+  const generatorId = target.dataset.generatorId;
+  if (!action || !generatorId) return;
+
+  try {
+    if (action === "place-root") {
+      client.placeRoot(generatorId);
+      return;
+    }
+    if (action === "move-root") {
+      client.startMoveRoot(generatorId);
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown root command error";
+    setText("root-status", `root action failed: ${message}`);
+  }
 });
 
 window.addEventListener("keydown", (event) => {

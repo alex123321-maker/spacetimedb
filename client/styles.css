@@ -69,3 +69,43 @@ pre {
   font-size: 13px;
   line-height: 1.3;
 }
+
+#root-status {
+  margin-top: 8px;
+  color: #ffd480;
+  font-size: 13px;
+}
+
+.action-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.action-row code {
+  color: #cde8ff;
+  font-size: 12px;
+}
+
+.action-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.action-row button {
+  background: #253447;
+  color: var(--text);
+  border: 1px solid #3a516d;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.action-row button:hover {
+  background: #31465f;
+}

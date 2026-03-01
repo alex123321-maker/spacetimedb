@@ -37,6 +37,9 @@ import {
 import ApplyMoveReducer from "./apply_move_reducer";
 import EnqueueActionReducer from "./enqueue_action_reducer";
 import JoinPlayerReducer from "./join_player_reducer";
+import PlaceRootReducer from "./place_root_reducer";
+import StartMoveRootReducer from "./start_move_root_reducer";
+import UpdateWorldConfigReducer from "./update_world_config_reducer";
 
 // Import all procedure arg schemas
 
@@ -45,6 +48,8 @@ import GeneratorRow from "./generator_table";
 import ObstacleRow from "./obstacle_table";
 import PendingActionRow from "./pending_action_table";
 import PlayerRow from "./player_table";
+import RootNodeRow from "./root_node_table";
+import RootRelocationRow from "./root_relocation_table";
 import SpawnMarkerRow from "./spawn_marker_table";
 import WorldConfigRow from "./world_config_table";
 import WorldStateRow from "./world_state_table";
@@ -97,6 +102,28 @@ const tablesSchema = __schema({
       { name: 'player_player_id_key', constraint: 'unique', columns: ['playerId'] },
     ],
   }, PlayerRow),
+  rootNode: __table({
+    name: 'root_node',
+    indexes: [
+      { name: 'playerId', algorithm: 'btree', columns: [
+        'playerId',
+      ] },
+    ],
+    constraints: [
+      { name: 'root_node_player_id_key', constraint: 'unique', columns: ['playerId'] },
+    ],
+  }, RootNodeRow),
+  rootRelocation: __table({
+    name: 'root_relocation',
+    indexes: [
+      { name: 'playerId', algorithm: 'btree', columns: [
+        'playerId',
+      ] },
+    ],
+    constraints: [
+      { name: 'root_relocation_player_id_key', constraint: 'unique', columns: ['playerId'] },
+    ],
+  }, RootRelocationRow),
   spawnMarker: __table({
     name: 'spawn_marker',
     indexes: [
@@ -137,6 +164,9 @@ const reducersSchema = __reducers(
   __reducerSchema("apply_move", ApplyMoveReducer),
   __reducerSchema("enqueue_action", EnqueueActionReducer),
   __reducerSchema("join_player", JoinPlayerReducer),
+  __reducerSchema("place_root", PlaceRootReducer),
+  __reducerSchema("start_move_root", StartMoveRootReducer),
+  __reducerSchema("update_world_config", UpdateWorldConfigReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

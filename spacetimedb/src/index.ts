@@ -16,6 +16,9 @@ const DEFAULT_WAVE_EVERY_DAYS = 3;
 const DEFAULT_MARKER_LEAD_DAYS = 1;
 const DEFAULT_GENERATOR_LIFE_DAYS = 9;
 const DEFAULT_WAVE_SIZE = 12;
+const DEFAULT_TICKS_PER_MINUTE = 1;
+const ROOT_MOVE_COOLDOWN_DAYS = 24;
+const ROOT_MOVE_DURATION_MINUTES = 10;
 
 const MAP_SIZE_CELLS = 128;
 const MIN_GENERATOR_DIST_CELLS = 10;
@@ -33,6 +36,7 @@ interface WorldStateRow {
 interface WorldConfigRow {
   id: string;
   ticksPerDay: number;
+  ticksPerMinute: number;
   waveEveryDays: number;
   markerLeadDays: number;
   generatorLifeDays: number;
@@ -44,6 +48,8 @@ interface PlayerRow {
   posX: bigint;
   posY: bigint;
   lastProcessedTick: bigint;
+  rootGeneratorId: string;
+  rootMoveAvailableAtTick: bigint;
 }
 
 interface PlayerSessionRow {
@@ -87,6 +93,20 @@ interface GeneratorRow {
   state: string;
 }
 
+interface RootNodeRow {
+  playerId: string;
+  generatorId: string;
+  placedAtTick: bigint;
+}
+
+interface RootRelocationRow {
+  playerId: string;
+  fromGeneratorId: string;
+  toGeneratorId: string;
+  startTick: bigint;
+  finishTick: bigint;
+}
+
 interface GridCell {
   x: number;
   y: number;
@@ -114,6 +134,7 @@ const worldConfigTable = table(
   {
     id: t.string().primaryKey(),
     ticksPerDay: t.u32(),
+    ticksPerMinute: t.u32(),
     waveEveryDays: t.u32(),
     markerLeadDays: t.u32(),
     generatorLifeDays: t.u32(),
@@ -128,6 +149,8 @@ const playerTable = table(
     posX: t.i64(),
     posY: t.i64(),
     lastProcessedTick: t.u64(),
+    rootGeneratorId: t.string(),
+    rootMoveAvailableAtTick: t.u64(),
   },
 );
 
@@ -187,6 +210,26 @@ const generatorTable = table(
   },
 );
 
+const rootNodeTable = table(
+  { public: true },
+  {
+    playerId: t.string().primaryKey(),
+    generatorId: t.string(),
+    placedAtTick: t.u64(),
+  },
+);
+
+const rootRelocationTable = table(
+  { public: true },
+  {
+    playerId: t.string().primaryKey(),
+    fromGeneratorId: t.string(),
+    toGeneratorId: t.string(),
+    startTick: t.u64(),
+    finishTick: t.u64(),
+  },
+);
+
 const tickScheduleTable = table(
   {
     public: false,
@@ -207,6 +250,8 @@ const spacetimedb = schema({
   obstacle: obstacleTable,
   spawnMarker: spawnMarkerTable,
   generator: generatorTable,
+  rootNode: rootNodeTable,
+  rootRelocation: rootRelocationTable,
   tickSchedule: tickScheduleTable,
 });
 
@@ -311,6 +356,7 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
   const created = {
     id: WORLD_CONFIG_ID,
     ticksPerDay: DEFAULT_TICKS_PER_DAY,
+    ticksPerMinute: DEFAULT_TICKS_PER_MINUTE,
     waveEveryDays: DEFAULT_WAVE_EVERY_DAYS,
     markerLeadDays: DEFAULT_MARKER_LEAD_DAYS,
     generatorLifeDays: DEFAULT_GENERATOR_LIFE_DAYS,
@@ -342,6 +388,7 @@ function ensureTickSchedule(ctx: any): void {
 function waveTimingFromConfig(config: WorldConfigRow): WaveTiming {
   if (
     config.ticksPerDay <= 0 ||
+    config.ticksPerMinute <= 0 ||
     config.waveEveryDays <= 0 ||
     config.markerLeadDays <= 0 ||
     config.generatorLifeDays <= 0 ||
@@ -360,6 +407,27 @@ function waveTimingFromConfig(config: WorldConfigRow): WaveTiming {
     generatorLifeTicks: ticksPerDay * BigInt(config.generatorLifeDays),
     waveSize: config.waveSize,
   };
+}
+
+function rootMoveCooldownTicks(config: WorldConfigRow): bigint {
+  return BigInt(config.ticksPerDay) * BigInt(ROOT_MOVE_COOLDOWN_DAYS);
+}
+
+function rootMoveDurationTicks(config: WorldConfigRow): bigint {
+  return BigInt(config.ticksPerMinute) * BigInt(ROOT_MOVE_DURATION_MINUTES);
+}
+
+function setGeneratorControl(
+  ctx: any,
+  generator: GeneratorRow,
+  ownerPlayerId: string,
+  state: "neutral" | "controlled" | "isolated",
+): void {
+  ctx.db.generator.id.update({
+    ...generator,
+    ownerPlayerId,
+    state,
+  });
 }
 
 function generateWaveCells(
@@ -456,12 +524,120 @@ function materializeWaveGenerators(
   }
 }
 
+function processCompletedRootRelocations(
+  ctx: any,
+  config: WorldConfigRow,
+  currentTick: bigint,
+): void {
+  const dueRelocations = (
+    Array.from(ctx.db.rootRelocation.iter()) as RootRelocationRow[]
+  )
+    .filter((relocation) => relocation.finishTick <= currentTick)
+    .sort((a, b) => cmpString(a.playerId, b.playerId));
+
+  for (const relocation of dueRelocations) {
+    const releaseTargetIfReserved = (): void => {
+      const target = ctx.db.generator.id.find(
+        relocation.toGeneratorId,
+      ) as GeneratorRow | null;
+      if (
+        target &&
+        target.state === "isolated" &&
+        target.ownerPlayerId === ""
+      ) {
+        setGeneratorControl(ctx, target, "", "neutral");
+      }
+    };
+
+    const player = ctx.db.player.playerId.find(
+      relocation.playerId,
+    ) as PlayerRow | null;
+    if (!player || player.rootGeneratorId !== relocation.fromGeneratorId) {
+      releaseTargetIfReserved();
+      ctx.db.rootRelocation.playerId.delete(relocation.playerId);
+      continue;
+    }
+
+    const toGenerator = ctx.db.generator.id.find(
+      relocation.toGeneratorId,
+    ) as GeneratorRow | null;
+    if (!toGenerator || toGenerator.state !== "isolated") {
+      releaseTargetIfReserved();
+      ctx.db.rootRelocation.playerId.delete(relocation.playerId);
+      continue;
+    }
+
+    const fromGenerator = ctx.db.generator.id.find(
+      relocation.fromGeneratorId,
+    ) as GeneratorRow | null;
+    if (fromGenerator && fromGenerator.ownerPlayerId === relocation.playerId) {
+      setGeneratorControl(ctx, fromGenerator, "", "neutral");
+    }
+
+    setGeneratorControl(ctx, toGenerator, relocation.playerId, "controlled");
+
+    ctx.db.player.playerId.update({
+      ...player,
+      rootGeneratorId: relocation.toGeneratorId,
+      rootMoveAvailableAtTick: currentTick + rootMoveCooldownTicks(config),
+    });
+
+    const existingRoot = ctx.db.rootNode.playerId.find(
+      relocation.playerId,
+    ) as RootNodeRow | null;
+    if (existingRoot) {
+      ctx.db.rootNode.playerId.update({
+        ...existingRoot,
+        generatorId: relocation.toGeneratorId,
+        placedAtTick: currentTick,
+      });
+    } else {
+      ctx.db.rootNode.insert({
+        playerId: relocation.playerId,
+        generatorId: relocation.toGeneratorId,
+        placedAtTick: currentTick,
+      });
+    }
+
+    ctx.db.rootRelocation.playerId.delete(relocation.playerId);
+  }
+}
+
 function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
   const expired = (Array.from(ctx.db.generator.iter()) as GeneratorRow[])
     .filter((generator) => currentTick >= generator.expireTick)
     .sort((a, b) => cmpString(a.id, b.id));
 
   for (const generator of expired) {
+    const rootedPlayers = (Array.from(ctx.db.player.iter()) as PlayerRow[])
+      .filter((player) => player.rootGeneratorId === generator.id)
+      .sort((a, b) => cmpString(a.playerId, b.playerId));
+
+    for (const player of rootedPlayers) {
+      const relocation = ctx.db.rootRelocation.playerId.find(
+        player.playerId,
+      ) as RootRelocationRow | null;
+      if (relocation) {
+        const target = ctx.db.generator.id.find(
+          relocation.toGeneratorId,
+        ) as GeneratorRow | null;
+        if (
+          target &&
+          target.state === "isolated" &&
+          target.ownerPlayerId === ""
+        ) {
+          setGeneratorControl(ctx, target, "", "neutral");
+        }
+      }
+
+      ctx.db.player.playerId.update({
+        ...player,
+        rootGeneratorId: "",
+      });
+      ctx.db.rootNode.playerId.delete(player.playerId);
+      ctx.db.rootRelocation.playerId.delete(player.playerId);
+    }
+
     ctx.db.generator.id.delete(generator.id);
   }
 }
@@ -545,6 +721,7 @@ function processTick(ctx: any): void {
   runWaveLifecycle(ctx, world, config);
 
   const currentTick = world.currentTick;
+  processCompletedRootRelocations(ctx, config, currentTick);
   const due = (Array.from(ctx.db.pendingAction.iter()) as PendingActionRow[])
     .filter((action) => action.tick <= currentTick)
     .sort((a, b) => {
@@ -614,6 +791,8 @@ export const joinPlayer = spacetimedb.reducer((ctx) => {
       posX: 0n,
       posY: 0n,
       lastProcessedTick: world.currentTick,
+      rootGeneratorId: "",
+      rootMoveAvailableAtTick: 0n,
     });
   }
 
@@ -692,6 +871,149 @@ export const enqueueAction = spacetimedb.reducer(
       lastSeq: seq,
       actionBudget: sessionForTick.actionBudget - 1,
     });
+  },
+);
+
+export const placeRoot = spacetimedb.reducer(
+  {
+    generatorId: t.string(),
+  },
+  (ctx, { generatorId }) => {
+    const world = ensureWorldState(ctx);
+    const config = ensureWorldConfig(ctx);
+    const playerId = ctx.sender.toHexString();
+    const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
+    if (!player) {
+      throw new Error("player must call joinPlayer first");
+    }
+    if (player.rootGeneratorId !== "") {
+      throw new Error("player already has root");
+    }
+    if (ctx.db.rootRelocation.playerId.find(playerId)) {
+      throw new Error("root relocation already in progress");
+    }
+
+    const generator = ctx.db.generator.id.find(
+      generatorId,
+    ) as GeneratorRow | null;
+    if (!generator) {
+      throw new Error("generator not found");
+    }
+    if (generator.state !== "neutral" || generator.ownerPlayerId !== "") {
+      throw new Error("root can only be placed on neutral generator");
+    }
+
+    setGeneratorControl(ctx, generator, playerId, "controlled");
+    ctx.db.player.playerId.update({
+      ...player,
+      rootGeneratorId: generatorId,
+      rootMoveAvailableAtTick:
+        world.currentTick + rootMoveCooldownTicks(config),
+    });
+    const existingRoot = ctx.db.rootNode.playerId.find(
+      playerId,
+    ) as RootNodeRow | null;
+    if (existingRoot) {
+      ctx.db.rootNode.playerId.update({
+        ...existingRoot,
+        generatorId,
+        placedAtTick: world.currentTick,
+      });
+    } else {
+      ctx.db.rootNode.insert({
+        playerId,
+        generatorId,
+        placedAtTick: world.currentTick,
+      });
+    }
+  },
+);
+
+export const startMoveRoot = spacetimedb.reducer(
+  {
+    newGeneratorId: t.string(),
+  },
+  (ctx, { newGeneratorId }) => {
+    const world = ensureWorldState(ctx);
+    const config = ensureWorldConfig(ctx);
+    const playerId = ctx.sender.toHexString();
+    const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
+    if (!player) {
+      throw new Error("player must call joinPlayer first");
+    }
+    if (player.rootGeneratorId === "") {
+      throw new Error("player has no root");
+    }
+    if (player.rootGeneratorId === newGeneratorId) {
+      throw new Error("new root generator must differ from current root");
+    }
+    if (world.currentTick < player.rootMoveAvailableAtTick) {
+      throw new Error("root move is on cooldown");
+    }
+    if (ctx.db.rootRelocation.playerId.find(playerId)) {
+      throw new Error("root relocation already in progress");
+    }
+
+    const fromGenerator = ctx.db.generator.id.find(
+      player.rootGeneratorId,
+    ) as GeneratorRow | null;
+    if (!fromGenerator) {
+      throw new Error("current root generator not found");
+    }
+
+    const toGenerator = ctx.db.generator.id.find(
+      newGeneratorId,
+    ) as GeneratorRow | null;
+    if (!toGenerator) {
+      throw new Error("target generator not found");
+    }
+    if (toGenerator.state !== "neutral" || toGenerator.ownerPlayerId !== "") {
+      throw new Error("target generator must be neutral");
+    }
+
+    setGeneratorControl(ctx, toGenerator, "", "isolated");
+    ctx.db.rootRelocation.insert({
+      playerId,
+      fromGeneratorId: player.rootGeneratorId,
+      toGeneratorId: newGeneratorId,
+      startTick: world.currentTick,
+      finishTick: world.currentTick + rootMoveDurationTicks(config),
+    });
+  },
+);
+
+export const updateWorldConfig = spacetimedb.reducer(
+  {
+    ticksPerDay: t.u32(),
+    ticksPerMinute: t.u32(),
+    waveEveryDays: t.u32(),
+    markerLeadDays: t.u32(),
+    generatorLifeDays: t.u32(),
+    waveSize: t.u32(),
+  },
+  (
+    ctx,
+    {
+      ticksPerDay,
+      ticksPerMinute,
+      waveEveryDays,
+      markerLeadDays,
+      generatorLifeDays,
+      waveSize,
+    },
+  ) => {
+    const current = ensureWorldConfig(ctx);
+    const next: WorldConfigRow = {
+      ...current,
+      ticksPerDay,
+      ticksPerMinute,
+      waveEveryDays,
+      markerLeadDays,
+      generatorLifeDays,
+      waveSize,
+    };
+    waveTimingFromConfig(next);
+    ctx.db.worldConfig.id.update(next);
   },
 );
 

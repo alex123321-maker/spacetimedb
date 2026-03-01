@@ -45,6 +45,8 @@ export const Player = __t.object("Player", {
   posX: __t.i64(),
   posY: __t.i64(),
   lastProcessedTick: __t.u64(),
+  rootGeneratorId: __t.string(),
+  rootMoveAvailableAtTick: __t.u64(),
 });
 export type Player = __Infer<typeof Player>;
 
@@ -55,6 +57,22 @@ export const PlayerSession = __t.object("PlayerSession", {
   lastBudgetTick: __t.u64(),
 });
 export type PlayerSession = __Infer<typeof PlayerSession>;
+
+export const RootNode = __t.object("RootNode", {
+  playerId: __t.string(),
+  generatorId: __t.string(),
+  placedAtTick: __t.u64(),
+});
+export type RootNode = __Infer<typeof RootNode>;
+
+export const RootRelocation = __t.object("RootRelocation", {
+  playerId: __t.string(),
+  fromGeneratorId: __t.string(),
+  toGeneratorId: __t.string(),
+  startTick: __t.u64(),
+  finishTick: __t.u64(),
+});
+export type RootRelocation = __Infer<typeof RootRelocation>;
 
 export const SpawnMarker = __t.object("SpawnMarker", {
   id: __t.string(),
@@ -73,6 +91,7 @@ export type TickSchedule = __Infer<typeof TickSchedule>;
 export const WorldConfig = __t.object("WorldConfig", {
   id: __t.string(),
   ticksPerDay: __t.u32(),
+  ticksPerMinute: __t.u32(),
   waveEveryDays: __t.u32(),
   markerLeadDays: __t.u32(),
   generatorLifeDays: __t.u32(),

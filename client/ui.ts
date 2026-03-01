@@ -23,6 +23,8 @@ export interface GeneratorCell {
   y: number;
   spawnTick: bigint;
   expireTick: bigint;
+  ownerPlayerId: string;
+  state: string;
 }
 
 export interface PlayerCell {
@@ -32,6 +34,8 @@ export interface PlayerCell {
   isSelf: boolean;
   posX: bigint;
   posY: bigint;
+  rootGeneratorId: string;
+  rootMoveAvailableAtTick: bigint;
 }
 
 const FIXED_SCALE = 1000n;
@@ -68,6 +72,8 @@ export function toPlayerCell(
   playerId: string,
   posX: bigint,
   posY: bigint,
+  rootGeneratorId: string,
+  rootMoveAvailableAtTick: bigint,
   ownPlayerId: string | null
 ): PlayerCell {
   return {
@@ -76,7 +82,9 @@ export function toPlayerCell(
     y: toCell(posY),
     isSelf: ownPlayerId === playerId,
     posX,
-    posY
+    posY,
+    rootGeneratorId,
+    rootMoveAvailableAtTick
   };
 }
 
@@ -132,7 +140,8 @@ export function renderGeneratorsList(
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((generator) => {
       const expiresIn = generator.expireTick > now ? generator.expireTick - now : 0n;
-      return `${generator.id} @(${generator.x},${generator.y}) expiresInTicks=${expiresIn.toString()}`;
+      const owner = generator.ownerPlayerId || "none";
+      return `${generator.id} @(${generator.x},${generator.y}) state=${generator.state} owner=${owner} expiresInTicks=${expiresIn.toString()}`;
     });
 
   return ["generators:", ...rows].join("\n");
@@ -163,7 +172,8 @@ export function renderPlayersList(players: PlayerCell[]): string {
       const tag = player.isSelf ? " (you)" : "";
       const fxX = toFloat(Number(player.posX)).toFixed(3);
       const fxY = toFloat(Number(player.posY)).toFixed(3);
-      return `${player.id}${tag} cell=(${player.x},${player.y}) pos=(${fxX},${fxY})`;
+      const root = player.rootGeneratorId || "none";
+      return `${player.id}${tag} cell=(${player.x},${player.y}) pos=(${fxX},${fxY}) root=${root} rootMoveAvailableAt=${player.rootMoveAvailableAtTick.toString()}`;
     });
   return ["players:", ...rows].join("\n");
 }
