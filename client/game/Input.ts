@@ -178,12 +178,9 @@ export class Input {
 
   private toCanvasPoint(event: MouseEvent | PointerEvent | WheelEvent): { x: number; y: number } {
     const rect = this.options.canvas.getBoundingClientRect();
-    const scaleX = this.options.canvas.width / rect.width;
-    const scaleY = this.options.canvas.height / rect.height;
-
     return {
-      x: (event.clientX - rect.left) * scaleX,
-      y: (event.clientY - rect.top) * scaleY,
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
     };
   }
 }

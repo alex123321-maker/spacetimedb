@@ -21,6 +21,13 @@ function playerCell(player: Player): { x: number; y: number } {
   };
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 export class Hud {
   private readonly root: HTMLElement;
   private readonly statusEl: HTMLElement;
@@ -61,6 +68,28 @@ export class Hud {
 
     const myCell = myPlayer ? playerCell(myPlayer) : { x: 0, y: 0 };
     const range = snapshot.worldConfig?.interactRangeCells ?? 0;
+    const recentEvents = snapshot.eventLog
+      .slice()
+      .sort((a, b) => {
+        if (a.tick !== b.tick) {
+          return a.tick > b.tick ? -1 : 1;
+        }
+        return b.id.localeCompare(a.id);
+      })
+      .slice(0, 5);
+    const recentEventsHtml =
+      recentEvents.length === 0
+        ? "<div class=\"hud-meta\">events: none</div>"
+        : recentEvents
+            .map((event) => {
+              const payload = event.payloadJson.length > 80
+                ? `${event.payloadJson.slice(0, 80)}...`
+                : event.payloadJson;
+              return `<div class="hud-meta">[${event.tick.toString()}] ${escapeHtml(
+                event.eventType,
+              )} ${escapeHtml(payload)}</div>`;
+            })
+            .join("");
 
     this.statusEl.innerHTML = `
       <div><strong>id:</strong> ${snapshot.myPlayerId ?? "connecting..."}</div>
@@ -68,6 +97,9 @@ export class Hud {
       <div><strong>ping:</strong> n/a</div>
       <div><strong>pos:</strong> ${myPlayer ? `${myCell.x.toFixed(2)}, ${myCell.y.toFixed(2)}` : "n/a"}</div>
       <div><strong>range:</strong> ${range}</div>
+      <div><strong>generators:</strong> ${snapshot.generators.length}</div>
+      <div><strong>recent events:</strong></div>
+      ${recentEventsHtml}
     `;
 
     const selected = this.selection.selectedGeneratorId
