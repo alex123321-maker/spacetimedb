@@ -120,6 +120,9 @@ describe("SpacetimeDB interact range integration", () => {
       callReducer(conn, ["joinPlayer", "join_player"]);
       await wait(120);
 
+      callReducer(conn, ["setTestAdminMode", "set_test_admin_mode"], {
+        enabled: true,
+      });
       callReducer(conn, ["updateWorldConfig", "update_world_config"], {
         ticksPerDay: 5,
         ticksPerMinute: 1,
@@ -176,4 +179,3 @@ describe("SpacetimeDB interact range integration", () => {
     60_000,
   );
 });
-

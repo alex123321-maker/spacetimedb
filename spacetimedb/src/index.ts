@@ -32,6 +32,7 @@ const LINE_COOLDOWN_MINUTES = 2;
 const LINE_COOL_RATE_PER_TICK = 1;
 const NETWORK_SOLVE_SAFETY_TICKS = 20n;
 const MAX_NETWORK_SOLVE_PASSES = 8;
+const EVENT_LOG_RETENTION_TICKS = 2_000n;
 
 const MIN_GENERATOR_DIST_CELLS = 10;
 const MAX_WAVE_GENERATION_ATTEMPTS = 256;
@@ -548,6 +549,32 @@ function appendEvent(
     eventType,
     payloadJson,
   } as EventLogRow);
+}
+
+function pruneEventLog(ctx: any, currentTick: bigint): void {
+  if (EVENT_LOG_RETENTION_TICKS <= 0n) {
+    return;
+  }
+  if (currentTick <= EVENT_LOG_RETENTION_TICKS) {
+    return;
+  }
+
+  const minTick = currentTick - EVENT_LOG_RETENTION_TICKS;
+  const rows = Array.from(ctx.db.eventLog.iter()) as EventLogRow[];
+  for (const row of rows) {
+    if (row.tick < minTick) {
+      ctx.db.eventLog.id.delete(row.id);
+    }
+  }
+}
+
+function requireConfigAdmin(ctx: any, config: WorldConfigRow): void {
+  if (ctx.senderAuth.isInternal || config.enableTestAdmin) {
+    return;
+  }
+  throw new Error(
+    "world config updates require internal access or enableTestAdmin=true",
+  );
 }
 
 function markAllPlayersNetworkDirty(ctx: any): void {
@@ -1652,6 +1679,7 @@ function maybeSolveNetworks(
 function processTick(ctx: any): void {
   const world = ensureWorldState(ctx);
   const config = ensureWorldConfig(ctx);
+  pruneEventLog(ctx, world.currentTick);
   runWaveLifecycle(ctx, world, config);
 
   const currentTick = world.currentTick;
@@ -2137,6 +2165,7 @@ export const updateWorldConfig = spacetimedb.reducer(
     },
   ) => {
     const current = ensureWorldConfig(ctx);
+    requireConfigAdmin(ctx, current);
     const next: WorldConfigRow = {
       ...current,
       ticksPerDay,
@@ -2160,6 +2189,7 @@ export const updateWorldViewConfig = spacetimedb.reducer(
   },
   (ctx, { worldWidth, worldHeight, tileSizePx, interactRangeCells }) => {
     const current = ensureWorldConfig(ctx);
+    requireConfigAdmin(ctx, current);
     const next: WorldConfigRow = {
       ...current,
       worldWidth,

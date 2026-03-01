@@ -12,7 +12,7 @@ type ReducerMap = Record<string, (args?: unknown) => unknown>;
 
 describe("SpacetimeDB collision integration", () => {
   test.runIf(shouldRun)(
-    "Move into obstacle (1,0) is blocked",
+    "Move into obstacle is blocked",
     async () => {
       const host = process.env.STDB_HOST ?? "ws://127.0.0.1:3000";
       const dbName = process.env.STDB_DB_NAME ?? "continuum-grid";
@@ -40,12 +40,13 @@ describe("SpacetimeDB collision integration", () => {
       const obstacles = Array.from(conn.db.obstacle.iter()) as Array<
         Record<string, unknown>
       >;
-      const hasObstacleAt10 = obstacles.some((obstacle) => {
-        const x = Number((obstacle.x ?? 0) as number);
-        const y = Number((obstacle.y ?? 0) as number);
-        return x === 1 && y === 0;
-      });
-      expect(hasObstacleAt10).toBe(true);
+      const adjacentObstacle = obstacles
+        .map((obstacle) => ({
+          x: Number((obstacle.x ?? 0) as number),
+          y: Number((obstacle.y ?? 0) as number),
+        }))
+        .find((obstacle) => Math.abs(obstacle.x) + Math.abs(obstacle.y) === 1);
+      expect(adjacentObstacle).toBeDefined();
 
       const reducers = conn.reducers as unknown as ReducerMap;
       const callReducer = (names: string[], args?: unknown): void => {
@@ -73,7 +74,10 @@ describe("SpacetimeDB collision integration", () => {
         actionType: "Move",
         tick: BigInt(currentTick + 1),
         seq: 1n,
-        payloadJson: JSON.stringify({ dx: 1, dy: 0 })
+        payloadJson: JSON.stringify({
+          dx: adjacentObstacle?.x ?? 1,
+          dy: adjacentObstacle?.y ?? 0,
+        })
       });
 
       await wait(250);

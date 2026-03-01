@@ -129,10 +129,17 @@ describe("SpacetimeDB move target integration", () => {
         targetX: readNumber(afterMove, "targetX", "target_x"),
         targetY: readNumber(afterMove, "targetY", "target_y"),
       };
+      const obstacleRows = Array.from(conn.db.obstacle.iter()) as Array<
+        Record<string, unknown>
+      >;
+      const obstacleTarget = obstacleRows[0] ?? {};
+      const obstacleX = readNumber(obstacleTarget, "x");
+      const obstacleY = readNumber(obstacleTarget, "y");
+      expect(obstacleRows.length).toBeGreaterThan(0);
       try {
         callReducer(conn, ["setMoveTarget", "set_move_target"], {
-          cellX: 1,
-          cellY: 0,
+          cellX: obstacleX,
+          cellY: obstacleY,
         });
       } catch {
         // Reducer can throw synchronously on validation failures.
@@ -143,7 +150,7 @@ describe("SpacetimeDB move target integration", () => {
       const blockedTargetX = readNumber(afterBlockedAttempt, "targetX", "target_x");
       const blockedTargetY = readNumber(afterBlockedAttempt, "targetY", "target_y");
       expect(
-        blockedTargetX === 1 && blockedTargetY === 0,
+        blockedTargetX === obstacleX && blockedTargetY === obstacleY,
       ).toBeFalsy();
       expect(
         blockedTargetX === beforeBlockedTarget.targetX &&
@@ -153,4 +160,3 @@ describe("SpacetimeDB move target integration", () => {
     20_000,
   );
 });
-

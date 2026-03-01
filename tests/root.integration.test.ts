@@ -134,6 +134,9 @@ describe("SpacetimeDB root integration", () => {
       const a = await connectClient(host, dbName);
       const b = await connectClient(host, dbName);
 
+      callReducer(a.conn, ["setTestAdminMode", "set_test_admin_mode"], {
+        enabled: true,
+      });
       callReducer(a.conn, ["updateWorldConfig", "update_world_config"], {
         ticksPerDay: 10,
         ticksPerMinute: 1,

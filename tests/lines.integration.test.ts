@@ -126,6 +126,9 @@ describe("SpacetimeDB lines integration", () => {
       const a = await connectClient(host, dbName);
       const b = await connectClient(host, dbName);
 
+      callReducer(a.conn, ["setTestAdminMode", "set_test_admin_mode"], {
+        enabled: true,
+      });
       callReducer(a.conn, ["updateWorldConfig", "update_world_config"], {
         ticksPerDay: 5,
         ticksPerMinute: 1,
@@ -139,9 +142,6 @@ describe("SpacetimeDB lines integration", () => {
         worldHeight: 128,
         tileSizePx: 16,
         interactRangeCells: 1000,
-      });
-      callReducer(a.conn, ["setTestAdminMode", "set_test_admin_mode"], {
-        enabled: true,
       });
       await wait(250);
 

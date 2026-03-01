@@ -114,6 +114,9 @@ describe("SpacetimeDB network solve integration", () => {
       callReducer(conn, ["joinPlayer", "join_player"]);
       await wait(100);
 
+      callReducer(conn, ["setTestAdminMode", "set_test_admin_mode"], {
+        enabled: true,
+      });
       callReducer(conn, ["updateWorldConfig", "update_world_config"], {
         ticksPerDay: 10,
         ticksPerMinute: 1,
@@ -127,9 +130,6 @@ describe("SpacetimeDB network solve integration", () => {
         worldHeight: 128,
         tileSizePx: 16,
         interactRangeCells: 1000,
-      });
-      callReducer(conn, ["setTestAdminMode", "set_test_admin_mode"], {
-        enabled: true,
       });
       await wait(250);
 
