@@ -7,6 +7,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "format": "prettier --write \"spacetimedb/src/**/*.ts\"",
+    "client:dev": "vite --host 127.0.0.1 --port 5173",
+    "client:build": "vite build",
+    "client:preview": "vite preview --host 127.0.0.1 --port 4173",
     "spacetime:start:local": "D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe start --listen-addr 127.0.0.1:3000 --data-dir D:\\ProgramFiles\\SpacetimeDB\\data --non-interactive",
     "spacetime:dev": "set NO_PROXY=127.0.0.1,localhost&& D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe dev continuum-grid --project-path . --module-bindings-path client/module_bindings --client-lang typescript --yes --server-only",
     "spacetime:build": "D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe build --module-path spacetimedb",
@@ -20,6 +23,7 @@
     "@types/node": "^24.3.1",
     "prettier": "^3.6.2",
     "typescript": "^5.9.2",
+    "vite": "^7.3.1",
     "vitest": "^3.2.4"
   }
 }

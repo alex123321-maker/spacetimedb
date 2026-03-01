@@ -139,6 +139,10 @@ export class SpacetimeClient {
     return Number(tick);
   }
 
+  getOwnPlayerId(): string | null {
+    return this.playerId;
+  }
+
   private getOwnPlayer(): PlayerSnapshot | null {
     if (!this.conn || !this.playerId) return null;
     const rows = Array.from(this.conn.db.player.iter()) as PlainObject[];
@@ -155,6 +159,25 @@ export class SpacetimeClient {
       lastProcessedTick:
         readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n
     };
+  }
+
+  getPlayers(): PlayerSnapshot[] {
+    if (!this.conn) return [];
+    const rows = Array.from(this.conn.db.player.iter()) as PlainObject[];
+    const players = rows.map((row) => ({
+      playerId: readField<string>(row, "playerId", "player_id") ?? "",
+      posX: readField<bigint>(row, "posX", "pos_x") ?? 0n,
+      posY: readField<bigint>(row, "posY", "pos_y") ?? 0n,
+      lastProcessedTick:
+        readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n
+    }));
+
+    players.sort((a, b) => {
+      if (a.playerId < b.playerId) return -1;
+      if (a.playerId > b.playerId) return 1;
+      return 0;
+    });
+    return players;
   }
 
   getObstacles(): ObstacleCell[] {

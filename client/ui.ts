@@ -1,3 +1,5 @@
+import { toFloat } from "../shared/fixed";
+
 export interface MovePayload {
   dx: number;
   dy: number;
@@ -23,8 +25,17 @@ export interface GeneratorCell {
   expireTick: bigint;
 }
 
+export interface PlayerCell {
+  id: string;
+  x: number;
+  y: number;
+  isSelf: boolean;
+  posX: bigint;
+  posY: bigint;
+}
+
 const FIXED_SCALE = 1000n;
-const MAP_RADIUS = 5;
+const MAP_RADIUS = 10;
 
 export function mapInputToMove(input: string): MovePayload | null {
   switch (input) {
@@ -53,23 +64,44 @@ export function toCell(value: bigint): number {
   return Number(value / FIXED_SCALE);
 }
 
+export function toPlayerCell(
+  playerId: string,
+  posX: bigint,
+  posY: bigint,
+  ownPlayerId: string | null
+): PlayerCell {
+  return {
+    id: playerId,
+    x: toCell(posX),
+    y: toCell(posY),
+    isSelf: ownPlayerId === playerId,
+    posX,
+    posY
+  };
+}
+
 export function renderWorldMap(
-  playerX: number,
-  playerY: number,
+  centerX: number,
+  centerY: number,
   obstacles: ObstacleCell[],
   markers: SpawnMarkerCell[],
-  generators: GeneratorCell[]
+  generators: GeneratorCell[],
+  players: PlayerCell[]
 ): string {
   const obstacleSet = new Set(obstacles.map((obstacle) => `${obstacle.x}:${obstacle.y}`));
   const markerSet = new Set(markers.map((marker) => `${marker.x}:${marker.y}`));
   const generatorSet = new Set(generators.map((generator) => `${generator.x}:${generator.y}`));
+  const playerMap = new Map(players.map((player) => [`${player.x}:${player.y}`, player]));
   const rows: string[] = [];
 
-  for (let y = playerY + MAP_RADIUS; y >= playerY - MAP_RADIUS; y -= 1) {
+  for (let y = centerY + MAP_RADIUS; y >= centerY - MAP_RADIUS; y -= 1) {
     let row = "";
-    for (let x = playerX - MAP_RADIUS; x <= playerX + MAP_RADIUS; x += 1) {
-      if (x === playerX && y === playerY) {
+    for (let x = centerX - MAP_RADIUS; x <= centerX + MAP_RADIUS; x += 1) {
+      const player = playerMap.get(`${x}:${y}`);
+      if (player?.isSelf) {
         row += "P";
+      } else if (player) {
+        row += "p";
       } else if (generatorSet.has(`${x}:${y}`)) {
         row += "G";
       } else if (markerSet.has(`${x}:${y}`)) {
@@ -97,11 +129,7 @@ export function renderGeneratorsList(
   const now = BigInt(currentTick);
   const rows = generators
     .slice()
-    .sort((a, b) => {
-      if (a.id < b.id) return -1;
-      if (a.id > b.id) return 1;
-      return 0;
-    })
+    .sort((a, b) => a.id.localeCompare(b.id))
     .map((generator) => {
       const expiresIn = generator.expireTick > now ? generator.expireTick - now : 0n;
       return `${generator.id} @(${generator.x},${generator.y}) expiresInTicks=${expiresIn.toString()}`;
@@ -117,12 +145,25 @@ export function renderSpawnMarkersList(markers: SpawnMarkerCell[]): string {
 
   const rows = markers
     .slice()
-    .sort((a, b) => {
-      if (a.id < b.id) return -1;
-      if (a.id > b.id) return 1;
-      return 0;
-    })
+    .sort((a, b) => a.id.localeCompare(b.id))
     .map((marker) => `${marker.id} @(${marker.x},${marker.y}) spawnTick=${marker.spawnTick.toString()}`);
 
   return ["spawn markers:", ...rows].join("\n");
+}
+
+export function renderPlayersList(players: PlayerCell[]): string {
+  if (players.length === 0) {
+    return "players: none";
+  }
+
+  const rows = players
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((player) => {
+      const tag = player.isSelf ? " (you)" : "";
+      const fxX = toFloat(Number(player.posX)).toFixed(3);
+      const fxY = toFloat(Number(player.posY)).toFixed(3);
+      return `${player.id}${tag} cell=(${player.x},${player.y}) pos=(${fxX},${fxY})`;
+    });
+  return ["players:", ...rows].join("\n");
 }
