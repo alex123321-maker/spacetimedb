@@ -716,9 +716,6 @@ export const applyMove = spacetimedb.reducer(
 export const tick = (scheduledTickRef = spacetimedb.reducer(
   { arg: tickScheduleTable.rowType },
   (ctx) => {
-    if (!ctx.senderAuth.isInternal) {
-      throw new Error("tick is internal-only");
-    }
     processTick(ctx);
   },
 ));
