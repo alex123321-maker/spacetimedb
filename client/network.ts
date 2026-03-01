@@ -42,6 +42,18 @@ export interface GeneratorSnapshot {
   state: string;
 }
 
+export interface LineSnapshot {
+  id: string;
+  ownerPlayerId: string;
+  aGeneratorId: string;
+  bGeneratorId: string;
+  capacity: number;
+  temp: number;
+  active: boolean;
+  cooldownUntilTick: bigint;
+  createdAtTick: bigint;
+}
+
 export interface RootNodeSnapshot {
   playerId: string;
   generatorId: string;
@@ -100,6 +112,7 @@ export class SpacetimeClient {
             tables.obstacle,
             tables.spawnMarker,
             tables.generator,
+            tables.line,
             tables.rootNode,
             tables.rootRelocation
           ]);
@@ -159,6 +172,23 @@ export class SpacetimeClient {
       throw new Error("newGeneratorId is required");
     }
     this.callReducer(["startMoveRoot", "start_move_root"], { newGeneratorId });
+  }
+
+  buildLine(aGeneratorId: string, bGeneratorId: string): void {
+    if (!aGeneratorId || !bGeneratorId) {
+      throw new Error("aGeneratorId and bGeneratorId are required");
+    }
+    this.callReducer(["buildLine", "build_line"], {
+      aGeneratorId,
+      bGeneratorId
+    });
+  }
+
+  destroyLine(lineId: string): void {
+    if (!lineId) {
+      throw new Error("lineId is required");
+    }
+    this.callReducer(["destroyLine", "destroy_line"], { lineId });
   }
 
   getCurrentTick(): number {
@@ -287,6 +317,30 @@ export class SpacetimeClient {
       return 0;
     });
     return generators;
+  }
+
+  getLines(): LineSnapshot[] {
+    if (!this.conn) return [];
+    const rows = Array.from(this.conn.db.line.iter()) as PlainObject[];
+    const lines = rows.map((row) => ({
+      id: readField<string>(row, "id") ?? "",
+      ownerPlayerId:
+        readField<string>(row, "ownerPlayerId", "owner_player_id") ?? "",
+      aGeneratorId:
+        readField<string>(row, "aGeneratorId", "a_generator_id") ?? "",
+      bGeneratorId:
+        readField<string>(row, "bGeneratorId", "b_generator_id") ?? "",
+      capacity: readField<number>(row, "capacity") ?? 0,
+      temp: readField<number>(row, "temp") ?? 0,
+      active: readField<boolean>(row, "active") ?? false,
+      cooldownUntilTick:
+        readField<bigint>(row, "cooldownUntilTick", "cooldown_until_tick") ?? 0n,
+      createdAtTick:
+        readField<bigint>(row, "createdAtTick", "created_at_tick") ?? 0n
+    }));
+
+    lines.sort((a, b) => a.id.localeCompare(b.id));
+    return lines;
   }
 
   getRootNodes(): RootNodeSnapshot[] {

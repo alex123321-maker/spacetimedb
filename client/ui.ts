@@ -27,6 +27,16 @@ export interface GeneratorCell {
   state: string;
 }
 
+export interface LineCell {
+  id: string;
+  ownerPlayerId: string;
+  aGeneratorId: string;
+  bGeneratorId: string;
+  capacity: number;
+  temp: number;
+  active: boolean;
+}
+
 export interface PlayerCell {
   id: string;
   x: number;
@@ -176,4 +186,23 @@ export function renderPlayersList(players: PlayerCell[]): string {
       return `${player.id}${tag} cell=(${player.x},${player.y}) pos=(${fxX},${fxY}) root=${root} rootMoveAvailableAt=${player.rootMoveAvailableAtTick.toString()}`;
     });
   return ["players:", ...rows].join("\n");
+}
+
+export function renderLinesList(lines: LineCell[], ownerPlayerId: string | null): string {
+  const ownLines = ownerPlayerId
+    ? lines.filter((line) => line.ownerPlayerId === ownerPlayerId)
+    : [];
+  if (ownLines.length === 0) {
+    return "lines: none";
+  }
+
+  const rows = ownLines
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(
+      (line) =>
+        `${line.id} ${line.aGeneratorId}<->${line.bGeneratorId} cap=${line.capacity} temp=${line.temp} active=${line.active}`,
+    );
+
+  return ["lines:", ...rows].join("\n");
 }

@@ -17,4 +17,5 @@ export default __t.row({
   lastProcessedTick: __t.u64().name("last_processed_tick"),
   rootGeneratorId: __t.string().name("root_generator_id"),
   rootMoveAvailableAtTick: __t.u64().name("root_move_available_at_tick"),
+  networkDirty: __t.bool().name("network_dirty"),
 });

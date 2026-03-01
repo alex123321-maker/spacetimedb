@@ -34,10 +34,14 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AdminClaimGeneratorReducer from "./admin_claim_generator_reducer";
 import ApplyMoveReducer from "./apply_move_reducer";
+import BuildLineReducer from "./build_line_reducer";
+import DestroyLineReducer from "./destroy_line_reducer";
 import EnqueueActionReducer from "./enqueue_action_reducer";
 import JoinPlayerReducer from "./join_player_reducer";
 import PlaceRootReducer from "./place_root_reducer";
+import SetTestAdminModeReducer from "./set_test_admin_mode_reducer";
 import StartMoveRootReducer from "./start_move_root_reducer";
 import UpdateWorldConfigReducer from "./update_world_config_reducer";
 
@@ -45,6 +49,7 @@ import UpdateWorldConfigReducer from "./update_world_config_reducer";
 
 // Import all table schema definitions
 import GeneratorRow from "./generator_table";
+import LineRow from "./line_table";
 import ObstacleRow from "./obstacle_table";
 import PendingActionRow from "./pending_action_table";
 import PlayerRow from "./player_table";
@@ -69,6 +74,17 @@ const tablesSchema = __schema({
       { name: 'generator_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, GeneratorRow),
+  line: __table({
+    name: 'line',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'line_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, LineRow),
   obstacle: __table({
     name: 'obstacle',
     indexes: [
@@ -161,10 +177,14 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("admin_claim_generator", AdminClaimGeneratorReducer),
   __reducerSchema("apply_move", ApplyMoveReducer),
+  __reducerSchema("build_line", BuildLineReducer),
+  __reducerSchema("destroy_line", DestroyLineReducer),
   __reducerSchema("enqueue_action", EnqueueActionReducer),
   __reducerSchema("join_player", JoinPlayerReducer),
   __reducerSchema("place_root", PlaceRootReducer),
+  __reducerSchema("set_test_admin_mode", SetTestAdminModeReducer),
   __reducerSchema("start_move_root", StartMoveRootReducer),
   __reducerSchema("update_world_config", UpdateWorldConfigReducer),
 );

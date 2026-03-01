@@ -21,6 +21,19 @@ export const Generator = __t.object("Generator", {
 });
 export type Generator = __Infer<typeof Generator>;
 
+export const Line = __t.object("Line", {
+  id: __t.string(),
+  ownerPlayerId: __t.string(),
+  aGeneratorId: __t.string(),
+  bGeneratorId: __t.string(),
+  capacity: __t.i32(),
+  temp: __t.i32(),
+  active: __t.bool(),
+  cooldownUntilTick: __t.u64(),
+  createdAtTick: __t.u64(),
+});
+export type Line = __Infer<typeof Line>;
+
 export const Obstacle = __t.object("Obstacle", {
   id: __t.string(),
   x: __t.i32(),
@@ -47,6 +60,7 @@ export const Player = __t.object("Player", {
   lastProcessedTick: __t.u64(),
   rootGeneratorId: __t.string(),
   rootMoveAvailableAtTick: __t.u64(),
+  networkDirty: __t.bool(),
 });
 export type Player = __Infer<typeof Player>;
 
@@ -96,6 +110,7 @@ export const WorldConfig = __t.object("WorldConfig", {
   markerLeadDays: __t.u32(),
   generatorLifeDays: __t.u32(),
   waveSize: __t.u32(),
+  enableTestAdmin: __t.bool(),
 });
 export type WorldConfig = __Infer<typeof WorldConfig>;
 

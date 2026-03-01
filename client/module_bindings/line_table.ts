@@ -12,11 +12,12 @@ import {
 
 export default __t.row({
   id: __t.string().primaryKey(),
-  ticksPerDay: __t.u32().name("ticks_per_day"),
-  ticksPerMinute: __t.u32().name("ticks_per_minute"),
-  waveEveryDays: __t.u32().name("wave_every_days"),
-  markerLeadDays: __t.u32().name("marker_lead_days"),
-  generatorLifeDays: __t.u32().name("generator_life_days"),
-  waveSize: __t.u32().name("wave_size"),
-  enableTestAdmin: __t.bool().name("enable_test_admin"),
+  ownerPlayerId: __t.string().name("owner_player_id"),
+  aGeneratorId: __t.string().name("a_generator_id"),
+  bGeneratorId: __t.string().name("b_generator_id"),
+  capacity: __t.i32(),
+  temp: __t.i32(),
+  active: __t.bool(),
+  cooldownUntilTick: __t.u64().name("cooldown_until_tick"),
+  createdAtTick: __t.u64().name("created_at_tick"),
 });

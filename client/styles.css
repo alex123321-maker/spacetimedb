@@ -76,6 +76,12 @@ pre {
   font-size: 13px;
 }
 
+#line-status {
+  margin-top: 6px;
+  color: #7dd3ff;
+  font-size: 13px;
+}
+
 .action-row {
   display: grid;
   grid-template-columns: 1fr;
@@ -107,5 +113,35 @@ pre {
 }
 
 .action-row button:hover {
+  background: #31465f;
+}
+
+.line-builder-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.line-builder-grid label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.line-builder-grid select,
+.line-builder-grid button {
+  background: #253447;
+  color: var(--text);
+  border: 1px solid #3a516d;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: inherit;
+}
+
+.line-builder-grid button {
+  cursor: pointer;
+}
+
+.line-builder-grid button:hover {
   background: #31465f;
 }

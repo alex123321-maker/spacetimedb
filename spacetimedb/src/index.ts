@@ -19,6 +19,7 @@ const DEFAULT_WAVE_SIZE = 12;
 const DEFAULT_TICKS_PER_MINUTE = 1;
 const ROOT_MOVE_COOLDOWN_DAYS = 24;
 const ROOT_MOVE_DURATION_MINUTES = 10;
+const DEFAULT_LINE_CAPACITY = 150;
 
 const MAP_SIZE_CELLS = 128;
 const MIN_GENERATOR_DIST_CELLS = 10;
@@ -41,6 +42,7 @@ interface WorldConfigRow {
   markerLeadDays: number;
   generatorLifeDays: number;
   waveSize: number;
+  enableTestAdmin: boolean;
 }
 
 interface PlayerRow {
@@ -50,6 +52,7 @@ interface PlayerRow {
   lastProcessedTick: bigint;
   rootGeneratorId: string;
   rootMoveAvailableAtTick: bigint;
+  networkDirty: boolean;
 }
 
 interface PlayerSessionRow {
@@ -91,6 +94,18 @@ interface GeneratorRow {
   expireTick: bigint;
   ownerPlayerId: string;
   state: string;
+}
+
+interface LineRow {
+  id: string;
+  ownerPlayerId: string;
+  aGeneratorId: string;
+  bGeneratorId: string;
+  capacity: number;
+  temp: number;
+  active: boolean;
+  cooldownUntilTick: bigint;
+  createdAtTick: bigint;
 }
 
 interface RootNodeRow {
@@ -139,6 +154,7 @@ const worldConfigTable = table(
     markerLeadDays: t.u32(),
     generatorLifeDays: t.u32(),
     waveSize: t.u32(),
+    enableTestAdmin: t.bool(),
   },
 );
 
@@ -151,6 +167,7 @@ const playerTable = table(
     lastProcessedTick: t.u64(),
     rootGeneratorId: t.string(),
     rootMoveAvailableAtTick: t.u64(),
+    networkDirty: t.bool(),
   },
 );
 
@@ -210,6 +227,21 @@ const generatorTable = table(
   },
 );
 
+const lineTable = table(
+  { public: true },
+  {
+    id: t.string().primaryKey(),
+    ownerPlayerId: t.string(),
+    aGeneratorId: t.string(),
+    bGeneratorId: t.string(),
+    capacity: t.i32(),
+    temp: t.i32(),
+    active: t.bool(),
+    cooldownUntilTick: t.u64(),
+    createdAtTick: t.u64(),
+  },
+);
+
 const rootNodeTable = table(
   { public: true },
   {
@@ -250,6 +282,7 @@ const spacetimedb = schema({
   obstacle: obstacleTable,
   spawnMarker: spawnMarkerTable,
   generator: generatorTable,
+  line: lineTable,
   rootNode: rootNodeTable,
   rootRelocation: rootRelocationTable,
   tickSchedule: tickScheduleTable,
@@ -279,6 +312,16 @@ function cmpString(a: string, b: string): number {
 
 function obstacleId(x: bigint, y: bigint): string {
   return `${x.toString()}:${y.toString()}`;
+}
+
+function makeLineId(
+  playerId: string,
+  aGeneratorId: string,
+  bGeneratorId: string,
+): string {
+  const aMin = aGeneratorId <= bGeneratorId ? aGeneratorId : bGeneratorId;
+  const bMax = aGeneratorId <= bGeneratorId ? bGeneratorId : aGeneratorId;
+  return `${playerId}:${aMin}<->${bMax}`;
 }
 
 function spawnMarkerId(spawnTick: bigint, index: number): string {
@@ -361,6 +404,7 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
     markerLeadDays: DEFAULT_MARKER_LEAD_DAYS,
     generatorLifeDays: DEFAULT_GENERATOR_LIFE_DAYS,
     waveSize: DEFAULT_WAVE_SIZE,
+    enableTestAdmin: false,
   };
   ctx.db.worldConfig.insert(created);
   return created;
@@ -428,6 +472,46 @@ function setGeneratorControl(
     ownerPlayerId,
     state,
   });
+}
+
+function countControlledGenerators(ctx: any, playerId: string): number {
+  return (Array.from(ctx.db.generator.iter()) as GeneratorRow[]).filter(
+    (generator) =>
+      generator.ownerPlayerId === playerId && generator.state === "controlled",
+  ).length;
+}
+
+function countPlayerLines(ctx: any, playerId: string): number {
+  return (Array.from(ctx.db.line.iter()) as LineRow[]).filter(
+    (line) => line.ownerPlayerId === playerId,
+  ).length;
+}
+
+function getMaxLines(controlledCount: number): number {
+  const maxLines =
+    4 +
+    controlledCount * 2 -
+    Math.floor((controlledCount * controlledCount) / 10);
+  return Math.max(4, maxLines);
+}
+
+function removePlayerLinesTouchingGenerator(
+  ctx: any,
+  playerId: string,
+  generatorId: string,
+): void {
+  const lines = (Array.from(ctx.db.line.iter()) as LineRow[])
+    .filter(
+      (line) =>
+        line.ownerPlayerId === playerId &&
+        (line.aGeneratorId === generatorId ||
+          line.bGeneratorId === generatorId),
+    )
+    .sort((a, b) => cmpString(a.id, b.id));
+
+  for (const line of lines) {
+    ctx.db.line.id.delete(line.id);
+  }
 }
 
 function generateWaveCells(
@@ -572,6 +656,11 @@ function processCompletedRootRelocations(
     ) as GeneratorRow | null;
     if (fromGenerator && fromGenerator.ownerPlayerId === relocation.playerId) {
       setGeneratorControl(ctx, fromGenerator, "", "neutral");
+      removePlayerLinesTouchingGenerator(
+        ctx,
+        relocation.playerId,
+        relocation.fromGeneratorId,
+      );
     }
 
     setGeneratorControl(ctx, toGenerator, relocation.playerId, "controlled");
@@ -580,6 +669,7 @@ function processCompletedRootRelocations(
       ...player,
       rootGeneratorId: relocation.toGeneratorId,
       rootMoveAvailableAtTick: currentTick + rootMoveCooldownTicks(config),
+      networkDirty: true,
     });
 
     const existingRoot = ctx.db.rootNode.playerId.find(
@@ -609,6 +699,27 @@ function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
     .sort((a, b) => cmpString(a.id, b.id));
 
   for (const generator of expired) {
+    const attachedLines = (Array.from(ctx.db.line.iter()) as LineRow[])
+      .filter(
+        (line) =>
+          line.aGeneratorId === generator.id ||
+          line.bGeneratorId === generator.id,
+      )
+      .sort((a, b) => cmpString(a.id, b.id));
+
+    for (const line of attachedLines) {
+      const owner = ctx.db.player.playerId.find(
+        line.ownerPlayerId,
+      ) as PlayerRow | null;
+      if (owner) {
+        ctx.db.player.playerId.update({
+          ...owner,
+          networkDirty: true,
+        });
+      }
+      ctx.db.line.id.delete(line.id);
+    }
+
     const rootedPlayers = (Array.from(ctx.db.player.iter()) as PlayerRow[])
       .filter((player) => player.rootGeneratorId === generator.id)
       .sort((a, b) => cmpString(a.playerId, b.playerId));
@@ -633,6 +744,7 @@ function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
       ctx.db.player.playerId.update({
         ...player,
         rootGeneratorId: "",
+        networkDirty: true,
       });
       ctx.db.rootNode.playerId.delete(player.playerId);
       ctx.db.rootRelocation.playerId.delete(player.playerId);
@@ -765,6 +877,42 @@ function processTick(ctx: any): void {
   });
 }
 
+function requireJoined(ctx: any): {
+  world: WorldStateRow;
+  config: WorldConfigRow;
+  playerId: string;
+  player: PlayerRow;
+} {
+  const world = ensureWorldState(ctx);
+  const config = ensureWorldConfig(ctx);
+  const playerId = ctx.sender.toHexString();
+  const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
+  if (!player) {
+    throw new Error("player must call joinPlayer first");
+  }
+  return { world, config, playerId, player };
+}
+
+function requireControlledGenerator(
+  ctx: any,
+  generatorId: string,
+  playerId: string,
+): GeneratorRow {
+  const generator = ctx.db.generator.id.find(
+    generatorId,
+  ) as GeneratorRow | null;
+  if (!generator) {
+    throw new Error(`generator not found: ${generatorId}`);
+  }
+  if (
+    generator.ownerPlayerId !== playerId ||
+    generator.state !== "controlled"
+  ) {
+    throw new Error(`generator must be controlled by player: ${generatorId}`);
+  }
+  return generator;
+}
+
 export const init = spacetimedb.init((ctx) => {
   ensureWorldState(ctx);
   ensureWorldConfig(ctx);
@@ -793,6 +941,7 @@ export const joinPlayer = spacetimedb.reducer((ctx) => {
       lastProcessedTick: world.currentTick,
       rootGeneratorId: "",
       rootMoveAvailableAtTick: 0n,
+      networkDirty: false,
     });
   }
 
@@ -879,13 +1028,7 @@ export const placeRoot = spacetimedb.reducer(
     generatorId: t.string(),
   },
   (ctx, { generatorId }) => {
-    const world = ensureWorldState(ctx);
-    const config = ensureWorldConfig(ctx);
-    const playerId = ctx.sender.toHexString();
-    const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
-    if (!player) {
-      throw new Error("player must call joinPlayer first");
-    }
+    const { world, config, playerId, player } = requireJoined(ctx);
     if (player.rootGeneratorId !== "") {
       throw new Error("player already has root");
     }
@@ -909,6 +1052,7 @@ export const placeRoot = spacetimedb.reducer(
       rootGeneratorId: generatorId,
       rootMoveAvailableAtTick:
         world.currentTick + rootMoveCooldownTicks(config),
+      networkDirty: true,
     });
     const existingRoot = ctx.db.rootNode.playerId.find(
       playerId,
@@ -934,13 +1078,7 @@ export const startMoveRoot = spacetimedb.reducer(
     newGeneratorId: t.string(),
   },
   (ctx, { newGeneratorId }) => {
-    const world = ensureWorldState(ctx);
-    const config = ensureWorldConfig(ctx);
-    const playerId = ctx.sender.toHexString();
-    const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
-    if (!player) {
-      throw new Error("player must call joinPlayer first");
-    }
+    const { world, config, playerId, player } = requireJoined(ctx);
     if (player.rootGeneratorId === "") {
       throw new Error("player has no root");
     }
@@ -982,6 +1120,79 @@ export const startMoveRoot = spacetimedb.reducer(
   },
 );
 
+export const buildLine = spacetimedb.reducer(
+  {
+    aGeneratorId: t.string(),
+    bGeneratorId: t.string(),
+  },
+  (ctx, { aGeneratorId, bGeneratorId }) => {
+    const { world, playerId, player } = requireJoined(ctx);
+    if (player.rootGeneratorId === "") {
+      throw new Error("player must place root before building lines");
+    }
+    if (ctx.db.rootRelocation.playerId.find(playerId)) {
+      throw new Error("cannot build line while root relocation is in progress");
+    }
+    if (aGeneratorId === bGeneratorId) {
+      throw new Error("self-loop line is not allowed");
+    }
+
+    const a = requireControlledGenerator(ctx, aGeneratorId, playerId);
+    const b = requireControlledGenerator(ctx, bGeneratorId, playerId);
+    const lineId = makeLineId(playerId, a.id, b.id);
+    if (ctx.db.line.id.find(lineId)) {
+      throw new Error(`line already exists: ${lineId}`);
+    }
+
+    const controlledCount = countControlledGenerators(ctx, playerId);
+    const maxLines = getMaxLines(controlledCount);
+    const currentLines = countPlayerLines(ctx, playerId);
+    if (currentLines >= maxLines) {
+      throw new Error(`line limit reached: ${currentLines}/${maxLines}`);
+    }
+
+    const [aMin, bMax] = a.id <= b.id ? [a.id, b.id] : [b.id, a.id];
+    ctx.db.line.insert({
+      id: lineId,
+      ownerPlayerId: playerId,
+      aGeneratorId: aMin,
+      bGeneratorId: bMax,
+      capacity: DEFAULT_LINE_CAPACITY,
+      temp: 0,
+      active: true,
+      cooldownUntilTick: 0n,
+      createdAtTick: world.currentTick,
+    });
+
+    ctx.db.player.playerId.update({
+      ...player,
+      networkDirty: true,
+    });
+  },
+);
+
+export const destroyLine = spacetimedb.reducer(
+  {
+    lineId: t.string(),
+  },
+  (ctx, { lineId }) => {
+    const { playerId, player } = requireJoined(ctx);
+    const line = ctx.db.line.id.find(lineId) as LineRow | null;
+    if (!line) {
+      throw new Error(`line not found: ${lineId}`);
+    }
+    if (line.ownerPlayerId !== playerId) {
+      throw new Error("cannot destroy line owned by another player");
+    }
+
+    ctx.db.line.id.delete(lineId);
+    ctx.db.player.playerId.update({
+      ...player,
+      networkDirty: true,
+    });
+  },
+);
+
 export const updateWorldConfig = spacetimedb.reducer(
   {
     ticksPerDay: t.u32(),
@@ -1014,6 +1225,52 @@ export const updateWorldConfig = spacetimedb.reducer(
     };
     waveTimingFromConfig(next);
     ctx.db.worldConfig.id.update(next);
+  },
+);
+
+export const setTestAdminMode = spacetimedb.reducer(
+  {
+    enabled: t.bool(),
+  },
+  (ctx, { enabled }) => {
+    const current = ensureWorldConfig(ctx);
+    ctx.db.worldConfig.id.update({
+      ...current,
+      enableTestAdmin: enabled,
+    });
+  },
+);
+
+export const adminClaimGenerator = spacetimedb.reducer(
+  {
+    generatorId: t.string(),
+  },
+  (ctx, { generatorId }) => {
+    const config = ensureWorldConfig(ctx);
+    const playerId = ctx.sender.toHexString();
+    if (!config.enableTestAdmin) {
+      throw new Error("adminClaimGenerator is disabled");
+    }
+    const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
+    if (!player) {
+      throw new Error("player must call joinPlayer first");
+    }
+
+    const generator = ctx.db.generator.id.find(
+      generatorId,
+    ) as GeneratorRow | null;
+    if (!generator) {
+      throw new Error("generator not found");
+    }
+    if (generator.ownerPlayerId !== "" || generator.state !== "neutral") {
+      throw new Error("generator must be neutral to claim");
+    }
+
+    setGeneratorControl(ctx, generator, playerId, "controlled");
+    ctx.db.player.playerId.update({
+      ...player,
+      networkDirty: true,
+    });
   },
 );
 

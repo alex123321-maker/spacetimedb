@@ -6,17 +6,25 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AdminClaimGeneratorReducer from "../admin_claim_generator_reducer";
 import ApplyMoveReducer from "../apply_move_reducer";
+import BuildLineReducer from "../build_line_reducer";
+import DestroyLineReducer from "../destroy_line_reducer";
 import EnqueueActionReducer from "../enqueue_action_reducer";
 import JoinPlayerReducer from "../join_player_reducer";
 import PlaceRootReducer from "../place_root_reducer";
+import SetTestAdminModeReducer from "../set_test_admin_mode_reducer";
 import StartMoveRootReducer from "../start_move_root_reducer";
 import UpdateWorldConfigReducer from "../update_world_config_reducer";
 
+export type AdminClaimGeneratorParams = __Infer<typeof AdminClaimGeneratorReducer>;
 export type ApplyMoveParams = __Infer<typeof ApplyMoveReducer>;
+export type BuildLineParams = __Infer<typeof BuildLineReducer>;
+export type DestroyLineParams = __Infer<typeof DestroyLineReducer>;
 export type EnqueueActionParams = __Infer<typeof EnqueueActionReducer>;
 export type JoinPlayerParams = __Infer<typeof JoinPlayerReducer>;
 export type PlaceRootParams = __Infer<typeof PlaceRootReducer>;
+export type SetTestAdminModeParams = __Infer<typeof SetTestAdminModeReducer>;
 export type StartMoveRootParams = __Infer<typeof StartMoveRootReducer>;
 export type UpdateWorldConfigParams = __Infer<typeof UpdateWorldConfigReducer>;
 

@@ -3,6 +3,7 @@ import "./styles.css";
 import {
   mapInputToMove,
   renderGeneratorsList,
+  renderLinesList,
   renderPlayersList,
   renderSpawnMarkersList,
   renderWorldMap,
@@ -10,6 +11,8 @@ import {
 } from "./ui";
 
 const client = new SpacetimeClient();
+let selectedLineA = "";
+let selectedLineB = "";
 
 const app = document.getElementById("app");
 if (!app) {
@@ -24,6 +27,7 @@ app.innerHTML = `
       <div id="status">Connecting...</div>
       <div id="tick">tick: 0</div>
       <div id="root-status"></div>
+      <div id="line-status"></div>
     </section>
     <section class="panel">
       <h2>World Map</h2>
@@ -41,6 +45,12 @@ app.innerHTML = `
     <section class="panel">
       <h2>Root Actions</h2>
       <div id="generator-actions"></div>
+    </section>
+    <section class="panel">
+      <h2>Line Builder</h2>
+      <div id="line-builder"></div>
+      <pre id="lines-list"></pre>
+      <div id="line-actions"></div>
     </section>
     <section class="panel">
       <h2>Spawn Markers</h2>
@@ -122,6 +132,87 @@ function renderGeneratorActions(ownId: string | null): void {
   setHtml("generator-actions", rows);
 }
 
+function renderLineControls(ownId: string | null): void {
+  if (!ownId) {
+    setHtml("line-builder", "<p class=\"help\">Join first to build lines.</p>");
+    setHtml("line-actions", "");
+    return;
+  }
+
+  const generators = client
+    .getGenerators()
+    .filter(
+      (generator) =>
+        generator.ownerPlayerId === ownId && generator.state === "controlled"
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  if (generators.length === 0) {
+    setHtml("line-builder", "<p class=\"help\">Need controlled generators to build lines.</p>");
+    setHtml("line-actions", "");
+    return;
+  }
+
+  if (!selectedLineA || !generators.some((generator) => generator.id === selectedLineA)) {
+    selectedLineA = generators[0].id;
+  }
+  if (!selectedLineB || !generators.some((generator) => generator.id === selectedLineB)) {
+    selectedLineB = generators[Math.min(1, generators.length - 1)].id;
+  }
+
+  const options = generators
+    .map(
+      (generator) =>
+        `<option value="${generator.id}">${generator.id}</option>`
+    )
+    .join("");
+
+  setHtml(
+    "line-builder",
+    `
+      <div class="line-builder-grid">
+        <label>A generator</label>
+        <select id="line-a-select">${options}</select>
+        <label>B generator</label>
+        <select id="line-b-select">${options}</select>
+        <button data-action="build-line">Build Line</button>
+      </div>
+    `
+  );
+
+  const selectA = document.getElementById("line-a-select") as HTMLSelectElement | null;
+  const selectB = document.getElementById("line-b-select") as HTMLSelectElement | null;
+  if (selectA) {
+    selectA.value = selectedLineA;
+    selectA.addEventListener("change", () => {
+      selectedLineA = selectA.value;
+    });
+  }
+  if (selectB) {
+    selectB.value = selectedLineB;
+    selectB.addEventListener("change", () => {
+      selectedLineB = selectB.value;
+    });
+  }
+
+  const ownLines = client
+    .getLines()
+    .filter((line) => line.ownerPlayerId === ownId)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const lineRows = ownLines
+    .map(
+      (line) => `
+        <div class="action-row">
+          <code>${line.id}</code>
+          <span>${line.aGeneratorId}<->${line.bGeneratorId} cap=${line.capacity} temp=${line.temp} active=${line.active}</span>
+          <button data-action="destroy-line" data-line-id="${line.id}">Destroy Line</button>
+        </div>
+      `
+    )
+    .join("");
+  setHtml("line-actions", lineRows);
+}
+
 function render(): void {
   const ownId = client.getOwnPlayerId();
   const currentTick = client.getCurrentTick();
@@ -141,6 +232,7 @@ function render(): void {
   setText("tick", `tick: ${currentTick}`);
   setText("players-list", renderPlayersList(players));
   setText("generators-list", renderGeneratorsList(client.getGenerators(), currentTick));
+  setText("lines-list", renderLinesList(client.getLines(), ownId));
   setText("markers-list", renderSpawnMarkersList(client.getSpawnMarkers()));
 
   if (me) {
@@ -162,6 +254,7 @@ function render(): void {
   }
 
   renderGeneratorActions(ownId);
+  renderLineControls(ownId);
 }
 
 client.connect(() => {
@@ -172,21 +265,46 @@ app.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLButtonElement)) return;
   const action = target.dataset.action;
-  const generatorId = target.dataset.generatorId;
-  if (!action || !generatorId) return;
+  if (!action) return;
 
   try {
     if (action === "place-root") {
+      const generatorId = target.dataset.generatorId;
+      if (!generatorId) return;
       client.placeRoot(generatorId);
       return;
     }
     if (action === "move-root") {
+      const generatorId = target.dataset.generatorId;
+      if (!generatorId) return;
       client.startMoveRoot(generatorId);
+      return;
+    }
+    if (action === "build-line") {
+      const selectA = document.getElementById("line-a-select") as HTMLSelectElement | null;
+      const selectB = document.getElementById("line-b-select") as HTMLSelectElement | null;
+      const aId = selectA?.value ?? selectedLineA;
+      const bId = selectB?.value ?? selectedLineB;
+      selectedLineA = aId;
+      selectedLineB = bId;
+      client.buildLine(aId, bId);
+      setText("line-status", `line build requested: ${aId}<->${bId}`);
+      return;
+    }
+    if (action === "destroy-line") {
+      const lineId = target.dataset.lineId;
+      if (!lineId) return;
+      client.destroyLine(lineId);
+      setText("line-status", `line destroy requested: ${lineId}`);
     }
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Unknown root command error";
-    setText("root-status", `root action failed: ${message}`);
+      error instanceof Error ? error.message : "Unknown action error";
+    if (action.includes("line")) {
+      setText("line-status", `line action failed: ${message}`);
+    } else {
+      setText("root-status", `root action failed: ${message}`);
+    }
   }
 });
 
