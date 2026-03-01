@@ -142,6 +142,12 @@ describe("SpacetimeDB root integration", () => {
         generatorLifeDays: 60,
         waveSize: 12,
       });
+      callReducer(a.conn, ["updateWorldViewConfig", "update_world_view_config"], {
+        worldWidth: 128,
+        worldHeight: 128,
+        tileSizePx: 16,
+        interactRangeCells: 1000,
+      });
       await wait(250);
 
       await waitFor(
@@ -233,6 +239,12 @@ describe("SpacetimeDB root integration", () => {
         markerLeadDays: 1,
         generatorLifeDays: 2,
         waveSize: 8,
+      });
+      callReducer(a.conn, ["updateWorldViewConfig", "update_world_view_config"], {
+        worldWidth: 128,
+        worldHeight: 128,
+        tileSizePx: 16,
+        interactRangeCells: 1000,
       });
       await wait(250);
 

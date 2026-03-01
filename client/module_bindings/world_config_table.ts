@@ -18,5 +18,9 @@ export default __t.row({
   markerLeadDays: __t.u32().name("marker_lead_days"),
   generatorLifeDays: __t.u32().name("generator_life_days"),
   waveSize: __t.u32().name("wave_size"),
+  worldWidth: __t.u32().name("world_width"),
+  worldHeight: __t.u32().name("world_height"),
+  tileSizePx: __t.u16().name("tile_size_px"),
+  interactRangeCells: __t.u32().name("interact_range_cells"),
   enableTestAdmin: __t.bool().name("enable_test_admin"),
 });

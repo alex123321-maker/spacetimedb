@@ -41,14 +41,19 @@ import DestroyLineReducer from "./destroy_line_reducer";
 import EnqueueActionReducer from "./enqueue_action_reducer";
 import JoinPlayerReducer from "./join_player_reducer";
 import PlaceRootReducer from "./place_root_reducer";
+import SetMoveTargetReducer from "./set_move_target_reducer";
 import SetTestAdminModeReducer from "./set_test_admin_mode_reducer";
 import StartMoveRootReducer from "./start_move_root_reducer";
+import StopMoveReducer from "./stop_move_reducer";
 import UpdateWorldConfigReducer from "./update_world_config_reducer";
+import UpdateWorldViewConfigReducer from "./update_world_view_config_reducer";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import EventLogRow from "./event_log_table";
 import GeneratorRow from "./generator_table";
+import JunkRow from "./junk_table";
 import LineRow from "./line_table";
 import ObstacleRow from "./obstacle_table";
 import PendingActionRow from "./pending_action_table";
@@ -63,6 +68,17 @@ import WorldStateRow from "./world_state_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  eventLog: __table({
+    name: 'event_log',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'event_log_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, EventLogRow),
   generator: __table({
     name: 'generator',
     indexes: [
@@ -74,6 +90,17 @@ const tablesSchema = __schema({
       { name: 'generator_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, GeneratorRow),
+  junk: __table({
+    name: 'junk',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'junk_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, JunkRow),
   line: __table({
     name: 'line',
     indexes: [
@@ -184,9 +211,12 @@ const reducersSchema = __reducers(
   __reducerSchema("enqueue_action", EnqueueActionReducer),
   __reducerSchema("join_player", JoinPlayerReducer),
   __reducerSchema("place_root", PlaceRootReducer),
+  __reducerSchema("set_move_target", SetMoveTargetReducer),
   __reducerSchema("set_test_admin_mode", SetTestAdminModeReducer),
   __reducerSchema("start_move_root", StartMoveRootReducer),
+  __reducerSchema("stop_move", StopMoveReducer),
   __reducerSchema("update_world_config", UpdateWorldConfigReducer),
+  __reducerSchema("update_world_view_config", UpdateWorldViewConfigReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

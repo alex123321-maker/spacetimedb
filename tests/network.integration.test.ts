@@ -122,6 +122,12 @@ describe("SpacetimeDB network solve integration", () => {
         generatorLifeDays: 300,
         waveSize: 16,
       });
+      callReducer(conn, ["updateWorldViewConfig", "update_world_view_config"], {
+        worldWidth: 128,
+        worldHeight: 128,
+        tileSizePx: 16,
+        interactRangeCells: 1000,
+      });
       callReducer(conn, ["setTestAdminMode", "set_test_admin_mode"], {
         enabled: true,
       });

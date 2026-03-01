@@ -134,6 +134,12 @@ describe("SpacetimeDB lines integration", () => {
         generatorLifeDays: 200,
         waveSize: 20,
       });
+      callReducer(a.conn, ["updateWorldViewConfig", "update_world_view_config"], {
+        worldWidth: 128,
+        worldHeight: 128,
+        tileSizePx: 16,
+        interactRangeCells: 1000,
+      });
       callReducer(a.conn, ["setTestAdminMode", "set_test_admin_mode"], {
         enabled: true,
       });

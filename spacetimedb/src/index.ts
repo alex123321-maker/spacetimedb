@@ -19,6 +19,13 @@ const DEFAULT_WAVE_SIZE = 12;
 const DEFAULT_TICKS_PER_MINUTE = 1;
 const ROOT_MOVE_COOLDOWN_DAYS = 24;
 const ROOT_MOVE_DURATION_MINUTES = 10;
+const DEFAULT_WORLD_WIDTH = 128;
+const DEFAULT_WORLD_HEIGHT = 128;
+const DEFAULT_TILE_SIZE_PX = 16;
+const DEFAULT_INTERACT_RANGE_CELLS = 3;
+const DEFAULT_PLAYER_SPEED_CELLS_PER_TICK = 1;
+const DEFAULT_JUNK_COUNT = 200;
+const DEFAULT_JUNK_KIND_COUNT = 4;
 const DEFAULT_LINE_CAPACITY = 150;
 const DEFAULT_GENERATOR_OUTPUT = 100;
 const LINE_COOLDOWN_MINUTES = 2;
@@ -26,9 +33,9 @@ const LINE_COOL_RATE_PER_TICK = 1;
 const NETWORK_SOLVE_SAFETY_TICKS = 20n;
 const MAX_NETWORK_SOLVE_PASSES = 8;
 
-const MAP_SIZE_CELLS = 128;
 const MIN_GENERATOR_DIST_CELLS = 10;
 const MAX_WAVE_GENERATION_ATTEMPTS = 256;
+const MAX_JUNK_GENERATION_ATTEMPTS = 8_192;
 
 let scheduledTickRef: any;
 
@@ -47,6 +54,10 @@ interface WorldConfigRow {
   markerLeadDays: number;
   generatorLifeDays: number;
   waveSize: number;
+  worldWidth: number;
+  worldHeight: number;
+  tileSizePx: number;
+  interactRangeCells: number;
   enableTestAdmin: boolean;
 }
 
@@ -54,7 +65,12 @@ interface PlayerRow {
   playerId: string;
   posX: bigint;
   posY: bigint;
+  targetX: number;
+  targetY: number;
+  moving: boolean;
+  speedCellsPerTick: number;
   lastProcessedTick: bigint;
+  lastUpdatedTick: bigint;
   rootGeneratorId: string;
   rootMoveAvailableAtTick: bigint;
   networkDirty: boolean;
@@ -84,6 +100,13 @@ interface ObstacleRow {
   y: number;
 }
 
+interface JunkRow {
+  id: string;
+  x: number;
+  y: number;
+  kind: number;
+}
+
 interface SpawnMarkerRow {
   id: string;
   x: number;
@@ -110,6 +133,10 @@ interface LineRow {
   ownerPlayerId: string;
   aGeneratorId: string;
   bGeneratorId: string;
+  aX: number;
+  aY: number;
+  bX: number;
+  bY: number;
   length: number;
   capacity: number;
   load: number;
@@ -132,6 +159,13 @@ interface RootRelocationRow {
   toGeneratorId: string;
   startTick: bigint;
   finishTick: bigint;
+}
+
+interface EventLogRow {
+  id: string;
+  tick: bigint;
+  eventType: string;
+  payloadJson: string;
 }
 
 interface GridCell {
@@ -166,6 +200,10 @@ const worldConfigTable = table(
     markerLeadDays: t.u32(),
     generatorLifeDays: t.u32(),
     waveSize: t.u32(),
+    worldWidth: t.u32(),
+    worldHeight: t.u32(),
+    tileSizePx: t.u16(),
+    interactRangeCells: t.u32(),
     enableTestAdmin: t.bool(),
   },
 );
@@ -176,7 +214,12 @@ const playerTable = table(
     playerId: t.string().primaryKey(),
     posX: t.i64(),
     posY: t.i64(),
+    targetX: t.i32(),
+    targetY: t.i32(),
+    moving: t.bool(),
+    speedCellsPerTick: t.u16(),
     lastProcessedTick: t.u64(),
+    lastUpdatedTick: t.u64(),
     rootGeneratorId: t.string(),
     rootMoveAvailableAtTick: t.u64(),
     networkDirty: t.bool(),
@@ -216,6 +259,16 @@ const obstacleTable = table(
   },
 );
 
+const junkTable = table(
+  { public: true },
+  {
+    id: t.string().primaryKey(),
+    x: t.i32(),
+    y: t.i32(),
+    kind: t.i32(),
+  },
+);
+
 const spawnMarkerTable = table(
   { public: true },
   {
@@ -250,6 +303,10 @@ const lineTable = table(
     ownerPlayerId: t.string(),
     aGeneratorId: t.string(),
     bGeneratorId: t.string(),
+    aX: t.i32(),
+    aY: t.i32(),
+    bX: t.i32(),
+    bY: t.i32(),
     length: t.i32(),
     capacity: t.i32(),
     load: t.i32(),
@@ -281,6 +338,16 @@ const rootRelocationTable = table(
   },
 );
 
+const eventLogTable = table(
+  { public: true },
+  {
+    id: t.string().primaryKey(),
+    tick: t.u64(),
+    eventType: t.string(),
+    payloadJson: t.string(),
+  },
+);
+
 const tickScheduleTable = table(
   {
     public: false,
@@ -299,11 +366,13 @@ const spacetimedb = schema({
   playerSession: playerSessionTable,
   pendingAction: pendingActionTable,
   obstacle: obstacleTable,
+  junk: junkTable,
   spawnMarker: spawnMarkerTable,
   generator: generatorTable,
   line: lineTable,
   rootNode: rootNodeTable,
   rootRelocation: rootRelocationTable,
+  eventLog: eventLogTable,
   tickSchedule: tickScheduleTable,
 });
 
@@ -331,6 +400,18 @@ function cmpString(a: string, b: string): number {
 
 function obstacleId(x: bigint, y: bigint): string {
   return `${x.toString()}:${y.toString()}`;
+}
+
+function cellId(x: number, y: number): string {
+  return `${x}:${y}`;
+}
+
+function junkId(x: number, y: number): string {
+  return `junk:${x}:${y}`;
+}
+
+function eventId(currentTick: bigint, eventType: string, key: string): string {
+  return `${currentTick.toString()}:${eventType}:${key}`;
 }
 
 function makeLineId(
@@ -390,6 +471,98 @@ function clampInt(value: number, min: number, max: number): number {
   return value;
 }
 
+function isInsideWorld(
+  config: WorldConfigRow,
+  cellX: number,
+  cellY: number,
+): boolean {
+  return (
+    cellX >= 0 &&
+    cellY >= 0 &&
+    cellX < config.worldWidth &&
+    cellY < config.worldHeight
+  );
+}
+
+function clampToWorld(
+  config: WorldConfigRow,
+  cellX: number,
+  cellY: number,
+): GridCell {
+  return {
+    x: clampInt(cellX, 0, config.worldWidth - 1),
+    y: clampInt(cellY, 0, config.worldHeight - 1),
+  };
+}
+
+function playerCellX(player: PlayerRow): number {
+  return Number(player.posX / FIXED_SCALE);
+}
+
+function playerCellY(player: PlayerRow): number {
+  return Number(player.posY / FIXED_SCALE);
+}
+
+function isBlockedCell(
+  ctx: any,
+  config: WorldConfigRow,
+  cellX: number,
+  cellY: number,
+): boolean {
+  if (!isInsideWorld(config, cellX, cellY)) {
+    return true;
+  }
+  return Boolean(ctx.db.obstacle.id.find(cellId(cellX, cellY)));
+}
+
+function isPlayerInRangeOfGenerator(
+  player: PlayerRow,
+  generator: GeneratorRow,
+  rangeCells: number,
+): boolean {
+  const px = playerCellX(player);
+  const py = playerCellY(player);
+  const dx = px - generator.x;
+  const dy = py - generator.y;
+  return dx * dx + dy * dy <= rangeCells * rangeCells;
+}
+
+function appendEvent(
+  ctx: any,
+  currentTick: bigint,
+  eventType: string,
+  payload: Record<string, unknown>,
+): void {
+  const payloadJson = JSON.stringify(payload);
+  const key = payload.id ? String(payload.id) : payloadJson;
+  const base = eventId(currentTick, eventType, key);
+  let id = base;
+  let suffix = 1;
+  while (ctx.db.eventLog.id.find(id)) {
+    id = `${base}:${suffix}`;
+    suffix += 1;
+  }
+  ctx.db.eventLog.insert({
+    id,
+    tick: currentTick,
+    eventType,
+    payloadJson,
+  } as EventLogRow);
+}
+
+function markAllPlayersNetworkDirty(ctx: any): void {
+  const players = (Array.from(ctx.db.player.iter()) as PlayerRow[]).sort(
+    (a, b) => cmpString(a.playerId, b.playerId),
+  );
+  for (const player of players) {
+    if (player.networkDirty) continue;
+    ctx.db.player.playerId.update({
+      ...player,
+      networkDirty: true,
+    });
+  }
+}
+
 function isFarEnough(
   candidate: GridCell,
   selected: GridCell[],
@@ -423,7 +596,30 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
   const existing = ctx.db.worldConfig.id.find(
     WORLD_CONFIG_ID,
   ) as WorldConfigRow | null;
-  if (existing) return existing;
+  if (existing) {
+    const normalized: WorldConfigRow = {
+      ...existing,
+      worldWidth:
+        existing.worldWidth > 0 ? existing.worldWidth : DEFAULT_WORLD_WIDTH,
+      worldHeight:
+        existing.worldHeight > 0 ? existing.worldHeight : DEFAULT_WORLD_HEIGHT,
+      tileSizePx:
+        existing.tileSizePx > 0 ? existing.tileSizePx : DEFAULT_TILE_SIZE_PX,
+      interactRangeCells:
+        existing.interactRangeCells >= 0
+          ? existing.interactRangeCells
+          : DEFAULT_INTERACT_RANGE_CELLS,
+    };
+    if (
+      normalized.worldWidth !== existing.worldWidth ||
+      normalized.worldHeight !== existing.worldHeight ||
+      normalized.tileSizePx !== existing.tileSizePx ||
+      normalized.interactRangeCells !== existing.interactRangeCells
+    ) {
+      ctx.db.worldConfig.id.update(normalized);
+    }
+    return normalized;
+  }
 
   const created = {
     id: WORLD_CONFIG_ID,
@@ -433,6 +629,10 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
     markerLeadDays: DEFAULT_MARKER_LEAD_DAYS,
     generatorLifeDays: DEFAULT_GENERATOR_LIFE_DAYS,
     waveSize: DEFAULT_WAVE_SIZE,
+    worldWidth: DEFAULT_WORLD_WIDTH,
+    worldHeight: DEFAULT_WORLD_HEIGHT,
+    tileSizePx: DEFAULT_TILE_SIZE_PX,
+    interactRangeCells: DEFAULT_INTERACT_RANGE_CELLS,
     enableTestAdmin: false,
   };
   ctx.db.worldConfig.insert(created);
@@ -443,6 +643,55 @@ function ensureObstacles(ctx: any): void {
   for (const obstacle of SEEDED_OBSTACLES) {
     if (ctx.db.obstacle.id.find(obstacle.id)) continue;
     ctx.db.obstacle.insert(obstacle);
+  }
+}
+
+function ensureJunk(
+  ctx: any,
+  world: WorldStateRow,
+  config: WorldConfigRow,
+): void {
+  const existing = Array.from(ctx.db.junk.iter()) as JunkRow[];
+  if (existing.length > 0) {
+    return;
+  }
+
+  const blockedCells = new Set<string>();
+  const obstacles = Array.from(ctx.db.obstacle.iter()) as ObstacleRow[];
+  for (const obstacle of obstacles) {
+    blockedCells.add(cellId(obstacle.x, obstacle.y));
+  }
+  const generators = Array.from(ctx.db.generator.iter()) as GeneratorRow[];
+  for (const generator of generators) {
+    blockedCells.add(cellId(generator.x, generator.y));
+  }
+
+  let state = toU32(world.seed ^ 0xa5a5_1f3d);
+  let created = 0;
+  let attempts = 0;
+  while (
+    created < DEFAULT_JUNK_COUNT &&
+    attempts < MAX_JUNK_GENERATION_ATTEMPTS
+  ) {
+    attempts += 1;
+    state = xorshift32(state);
+    const x = state % config.worldWidth;
+    state = xorshift32(state);
+    const y = state % config.worldHeight;
+    const key = cellId(x, y);
+    if (blockedCells.has(key)) {
+      continue;
+    }
+    state = xorshift32(state);
+    const kind = state % DEFAULT_JUNK_KIND_COUNT;
+    ctx.db.junk.insert({
+      id: junkId(x, y),
+      x,
+      y,
+      kind,
+    } as JunkRow);
+    blockedCells.add(key);
+    created += 1;
   }
 }
 
@@ -465,9 +714,15 @@ function waveTimingFromConfig(config: WorldConfigRow): WaveTiming {
     config.waveEveryDays <= 0 ||
     config.markerLeadDays <= 0 ||
     config.generatorLifeDays <= 0 ||
-    config.waveSize <= 0
+    config.waveSize <= 0 ||
+    config.worldWidth <= 0 ||
+    config.worldHeight <= 0 ||
+    config.tileSizePx <= 0
   ) {
     throw new Error("worldConfig values must be positive");
+  }
+  if (config.interactRangeCells < 0) {
+    throw new Error("interactRangeCells must be >= 0");
   }
   if (config.markerLeadDays >= config.waveEveryDays) {
     throw new Error("markerLeadDays must be < waveEveryDays");
@@ -559,12 +814,18 @@ function removePlayerLinesTouchingGenerator(
 
 function generateWaveCells(
   ctx: any,
+  config: WorldConfigRow,
   worldSeed: number,
   spawnTick: bigint,
   waveSize: number,
 ): GridCell[] {
   const selected: GridCell[] = [];
   const used = new Set<string>();
+  const junkCells = new Set<string>(
+    (Array.from(ctx.db.junk.iter()) as JunkRow[]).map((junk) =>
+      cellId(junk.x, junk.y),
+    ),
+  );
   let state = makeWaveSeed(worldSeed, spawnTick);
 
   for (
@@ -580,13 +841,14 @@ function generateWaveCells(
     ) {
       attempts += 1;
       state = xorshift32(state);
-      const x = state % MAP_SIZE_CELLS;
+      const x = state % config.worldWidth;
       state = xorshift32(state);
-      const y = state % MAP_SIZE_CELLS;
+      const y = state % config.worldHeight;
 
       const key = `${x}:${y}`;
       if (used.has(key)) continue;
       if (ctx.db.obstacle.id.find(key)) continue;
+      if (junkCells.has(key)) continue;
 
       const candidate = { x, y };
       if (!isFarEnough(candidate, selected, minDistSq)) continue;
@@ -602,12 +864,14 @@ function generateWaveCells(
 function spawnWaveMarkers(
   ctx: any,
   world: WorldStateRow,
+  config: WorldConfigRow,
   timing: WaveTiming,
   currentTick: bigint,
 ): void {
   const spawnTick = currentTick + timing.markerLeadTicks;
   const positions = generateWaveCells(
     ctx,
+    config,
     world.seed,
     spawnTick,
     timing.waveSize,
@@ -630,6 +894,7 @@ function materializeWaveGenerators(
   timing: WaveTiming,
   currentTick: bigint,
 ): void {
+  let inserted = 0;
   const dueMarkers = (Array.from(ctx.db.spawnMarker.iter()) as SpawnMarkerRow[])
     .filter((marker) => marker.spawnTick === currentTick)
     .sort((a, b) => cmpString(a.id, b.id));
@@ -650,8 +915,19 @@ function materializeWaveGenerators(
         effectiveOutput: 0,
         lastNetworkSolveTick: currentTick,
       });
+      appendEvent(ctx, currentTick, "generatorSpawned", {
+        id: generatorId,
+        x: marker.x,
+        y: marker.y,
+        expireTick: (currentTick + timing.generatorLifeTicks).toString(),
+      });
+      inserted += 1;
     }
     ctx.db.spawnMarker.id.delete(marker.id);
+  }
+
+  if (inserted > 0) {
+    markAllPlayersNetworkDirty(ctx);
   }
 }
 
@@ -735,6 +1011,10 @@ function processCompletedRootRelocations(
         placedAtTick: currentTick,
       });
     }
+    appendEvent(ctx, currentTick, "rootMoveFinished", {
+      playerId: relocation.playerId,
+      toGeneratorId: relocation.toGeneratorId,
+    });
 
     ctx.db.rootRelocation.playerId.delete(relocation.playerId);
   }
@@ -744,6 +1024,10 @@ function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
   const expired = (Array.from(ctx.db.generator.iter()) as GeneratorRow[])
     .filter((generator) => currentTick >= generator.expireTick)
     .sort((a, b) => cmpString(a.id, b.id));
+
+  if (expired.length > 0) {
+    markAllPlayersNetworkDirty(ctx);
+  }
 
   for (const generator of expired) {
     const attachedLines = (Array.from(ctx.db.line.iter()) as LineRow[])
@@ -797,6 +1081,10 @@ function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
       ctx.db.rootRelocation.playerId.delete(player.playerId);
     }
 
+    appendEvent(ctx, currentTick, "generatorExpired", {
+      id: generator.id,
+      ownerPlayerId: generator.ownerPlayerId,
+    });
     ctx.db.generator.id.delete(generator.id);
   }
 }
@@ -811,7 +1099,7 @@ function runWaveLifecycle(
 
   const markerPhase = timing.waveEveryTicks - timing.markerLeadTicks;
   if (currentTick % timing.waveEveryTicks === markerPhase) {
-    spawnWaveMarkers(ctx, world, timing, currentTick);
+    spawnWaveMarkers(ctx, world, config, timing, currentTick);
   }
 
   if (currentTick !== 0n && currentTick % timing.waveEveryTicks === 0n) {
@@ -849,21 +1137,25 @@ function payloadToMove(payloadJson: string): { dx: number; dy: number } {
 
 function applyMoveInternal(
   ctx: any,
+  config: WorldConfigRow,
   playerId: string,
   dx: number,
   dy: number,
   currentTick: bigint,
-): void {
+): boolean {
+  if (Math.abs(dx) + Math.abs(dy) > 1) {
+    return false;
+  }
   const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
-  if (!player) return;
+  if (!player) return false;
 
-  const currentCellX = player.posX / FIXED_SCALE;
-  const currentCellY = player.posY / FIXED_SCALE;
-  const nextCellX = currentCellX + BigInt(dx);
-  const nextCellY = currentCellY + BigInt(dy);
+  const currentCellX = playerCellX(player);
+  const currentCellY = playerCellY(player);
+  const nextCellX = currentCellX + dx;
+  const nextCellY = currentCellY + dy;
 
-  if (ctx.db.obstacle.id.find(obstacleId(nextCellX, nextCellY))) {
-    return;
+  if (isBlockedCell(ctx, config, nextCellX, nextCellY)) {
+    return false;
   }
 
   ctx.db.player.playerId.update({
@@ -871,7 +1163,141 @@ function applyMoveInternal(
     posX: player.posX + BigInt(dx) * FIXED_SCALE,
     posY: player.posY + BigInt(dy) * FIXED_SCALE,
     lastProcessedTick: currentTick,
+    lastUpdatedTick: currentTick,
   });
+  return true;
+}
+
+function buildStepCandidates(
+  dxToTarget: number,
+  dyToTarget: number,
+): GridCell[] {
+  const absDx = Math.abs(dxToTarget);
+  const absDy = Math.abs(dyToTarget);
+  const sx = dxToTarget === 0 ? 0 : dxToTarget > 0 ? 1 : -1;
+  const sy = dyToTarget === 0 ? 0 : dyToTarget > 0 ? 1 : -1;
+
+  if (absDx === 0 && absDy === 0) {
+    return [];
+  }
+  if (absDx >= absDy) {
+    return absDy === 0
+      ? [{ x: sx, y: 0 }]
+      : [
+          { x: sx, y: 0 },
+          { x: 0, y: sy },
+        ];
+  }
+  return absDx === 0
+    ? [{ x: 0, y: sy }]
+    : [
+        { x: 0, y: sy },
+        { x: sx, y: 0 },
+      ];
+}
+
+function applyPlayerMovement(
+  ctx: any,
+  config: WorldConfigRow,
+  currentTick: bigint,
+): void {
+  const players = (Array.from(ctx.db.player.iter()) as PlayerRow[]).sort(
+    (a, b) => cmpString(a.playerId, b.playerId),
+  );
+
+  for (const player of players) {
+    if (!player.moving) continue;
+
+    const maxSteps = Math.max(1, player.speedCellsPerTick);
+    for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
+      const latest = ctx.db.player.playerId.find(
+        player.playerId,
+      ) as PlayerRow | null;
+      if (!latest || !latest.moving) {
+        break;
+      }
+
+      const currentCell = { x: playerCellX(latest), y: playerCellY(latest) };
+      const clampedTarget = clampToWorld(
+        config,
+        latest.targetX,
+        latest.targetY,
+      );
+      if (
+        latest.targetX !== clampedTarget.x ||
+        latest.targetY !== clampedTarget.y
+      ) {
+        ctx.db.player.playerId.update({
+          ...latest,
+          targetX: clampedTarget.x,
+          targetY: clampedTarget.y,
+        });
+      }
+
+      if (
+        currentCell.x === clampedTarget.x &&
+        currentCell.y === clampedTarget.y
+      ) {
+        ctx.db.player.playerId.update({
+          ...latest,
+          targetX: currentCell.x,
+          targetY: currentCell.y,
+          moving: false,
+        });
+        break;
+      }
+
+      const candidates = buildStepCandidates(
+        clampedTarget.x - currentCell.x,
+        clampedTarget.y - currentCell.y,
+      );
+      let moved = false;
+      for (const step of candidates) {
+        moved = applyMoveInternal(
+          ctx,
+          config,
+          latest.playerId,
+          step.x,
+          step.y,
+          currentTick,
+        );
+        if (moved) {
+          break;
+        }
+      }
+
+      const afterStep = ctx.db.player.playerId.find(
+        player.playerId,
+      ) as PlayerRow | null;
+      if (!afterStep) {
+        break;
+      }
+
+      const afterCell = {
+        x: playerCellX(afterStep),
+        y: playerCellY(afterStep),
+      };
+      if (!moved) {
+        ctx.db.player.playerId.update({
+          ...afterStep,
+          targetX: afterCell.x,
+          targetY: afterCell.y,
+          moving: false,
+        });
+        break;
+      }
+
+      if (afterCell.x === clampedTarget.x && afterCell.y === clampedTarget.y) {
+        ctx.db.player.playerId.update({
+          ...afterStep,
+          targetX: clampedTarget.x,
+          targetY: clampedTarget.y,
+          moving: false,
+        });
+        break;
+      }
+    }
+  }
 }
 
 interface SolveEdge {
@@ -1008,12 +1434,29 @@ function solvePlayerNetwork(
       let next = line;
       const a = generatorById.get(line.aGeneratorId);
       const b = generatorById.get(line.bGeneratorId);
+      const expectedAX = a ? a.x : line.aX;
+      const expectedAY = a ? a.y : line.aY;
+      const expectedBX = b ? b.x : line.bX;
+      const expectedBY = b ? b.y : line.bY;
       const expectedLength =
         a && b
           ? manhattanDistance({ x: a.x, y: a.y }, { x: b.x, y: b.y })
           : line.length;
-      if (line.length !== expectedLength) {
-        next = { ...next, length: expectedLength };
+      if (
+        line.length !== expectedLength ||
+        line.aX !== expectedAX ||
+        line.aY !== expectedAY ||
+        line.bX !== expectedBX ||
+        line.bY !== expectedBY
+      ) {
+        next = {
+          ...next,
+          aX: expectedAX,
+          aY: expectedAY,
+          bX: expectedBX,
+          bY: expectedBY,
+          length: expectedLength,
+        };
       }
 
       const shouldBeActive = line.cooldownUntilTick <= currentTick;
@@ -1111,6 +1554,12 @@ function solvePlayerNetwork(
       } else if (overheated) {
         if (line.active) {
           disabledByOverheat = true;
+          appendEvent(ctx, currentTick, "lineOverheated", {
+            id: line.id,
+            ownerPlayerId: line.ownerPlayerId,
+            load,
+            temp,
+          });
         }
         active = false;
         cooldownUntilTick = currentTick + cooldownTicks;
@@ -1127,6 +1576,10 @@ function solvePlayerNetwork(
         cooldownUntilTick,
       };
       if (
+        next.aX !== line.aX ||
+        next.aY !== line.aY ||
+        next.bX !== line.bX ||
+        next.bY !== line.bY ||
         next.length !== line.length ||
         next.load !== line.load ||
         next.temp !== line.temp ||
@@ -1218,6 +1671,7 @@ function processTick(ctx: any): void {
     if (action.actionType === "Move") {
       applyMoveInternal(
         ctx,
+        config,
         action.playerId,
         action.dx,
         action.dy,
@@ -1227,6 +1681,7 @@ function processTick(ctx: any): void {
     ctx.db.pendingAction.id.delete(action.id);
   }
 
+  applyPlayerMovement(ctx, config, currentTick);
   maybeSolveNetworks(ctx, config, currentTick);
 
   const nextTick = currentTick + 1n;
@@ -1261,7 +1716,26 @@ function requireJoined(ctx: any): {
   if (!player) {
     throw new Error("player must call joinPlayer first");
   }
-  return { world, config, playerId, player };
+
+  const clampedTarget = clampToWorld(config, player.targetX, player.targetY);
+  const normalized: PlayerRow = {
+    ...player,
+    targetX: clampedTarget.x,
+    targetY: clampedTarget.y,
+    speedCellsPerTick:
+      player.speedCellsPerTick > 0
+        ? player.speedCellsPerTick
+        : DEFAULT_PLAYER_SPEED_CELLS_PER_TICK,
+  };
+  if (
+    normalized.targetX !== player.targetX ||
+    normalized.targetY !== player.targetY ||
+    normalized.speedCellsPerTick !== player.speedCellsPerTick
+  ) {
+    ctx.db.player.playerId.update(normalized);
+  }
+
+  return { world, config, playerId, player: normalized };
 }
 
 function requireControlledGenerator(
@@ -1285,16 +1759,18 @@ function requireControlledGenerator(
 }
 
 export const init = spacetimedb.init((ctx) => {
-  ensureWorldState(ctx);
-  ensureWorldConfig(ctx);
+  const world = ensureWorldState(ctx);
+  const config = ensureWorldConfig(ctx);
   ensureObstacles(ctx);
+  ensureJunk(ctx, world, config);
   ensureTickSchedule(ctx);
 });
 
 export const onConnect = spacetimedb.clientConnected((ctx) => {
-  ensureWorldState(ctx);
-  ensureWorldConfig(ctx);
+  const world = ensureWorldState(ctx);
+  const config = ensureWorldConfig(ctx);
   ensureObstacles(ctx);
+  ensureJunk(ctx, world, config);
 });
 
 export const joinPlayer = spacetimedb.reducer((ctx) => {
@@ -1309,7 +1785,12 @@ export const joinPlayer = spacetimedb.reducer((ctx) => {
       playerId,
       posX: 0n,
       posY: 0n,
+      targetX: 0,
+      targetY: 0,
+      moving: false,
+      speedCellsPerTick: DEFAULT_PLAYER_SPEED_CELLS_PER_TICK,
       lastProcessedTick: world.currentTick,
+      lastUpdatedTick: world.currentTick,
       rootGeneratorId: "",
       rootMoveAvailableAtTick: 0n,
       networkDirty: false,
@@ -1394,6 +1875,42 @@ export const enqueueAction = spacetimedb.reducer(
   },
 );
 
+export const setMoveTarget = spacetimedb.reducer(
+  {
+    cellX: t.i32(),
+    cellY: t.i32(),
+  },
+  (ctx, { cellX, cellY }) => {
+    const { config, player } = requireJoined(ctx);
+    if (!isInsideWorld(config, cellX, cellY)) {
+      throw new Error("target is outside world bounds");
+    }
+    if (isBlockedCell(ctx, config, cellX, cellY)) {
+      throw new Error("target cell is blocked");
+    }
+
+    const currentCell = { x: playerCellX(player), y: playerCellY(player) };
+    const moving = !(currentCell.x === cellX && currentCell.y === cellY);
+    ctx.db.player.playerId.update({
+      ...player,
+      targetX: cellX,
+      targetY: cellY,
+      moving,
+    });
+  },
+);
+
+export const stopMove = spacetimedb.reducer((ctx) => {
+  const { player } = requireJoined(ctx);
+  const currentCell = { x: playerCellX(player), y: playerCellY(player) };
+  ctx.db.player.playerId.update({
+    ...player,
+    targetX: currentCell.x,
+    targetY: currentCell.y,
+    moving: false,
+  });
+});
+
 export const placeRoot = spacetimedb.reducer(
   {
     generatorId: t.string(),
@@ -1415,6 +1932,11 @@ export const placeRoot = spacetimedb.reducer(
     }
     if (generator.state !== "neutral" || generator.ownerPlayerId !== "") {
       throw new Error("root can only be placed on neutral generator");
+    }
+    if (
+      !isPlayerInRangeOfGenerator(player, generator, config.interactRangeCells)
+    ) {
+      throw new Error("player is out of interact range for root placement");
     }
 
     setGeneratorControl(ctx, generator, playerId, "controlled");
@@ -1441,6 +1963,10 @@ export const placeRoot = spacetimedb.reducer(
         placedAtTick: world.currentTick,
       });
     }
+    appendEvent(ctx, world.currentTick, "rootPlaced", {
+      playerId,
+      generatorId,
+    });
   },
 );
 
@@ -1479,6 +2005,15 @@ export const startMoveRoot = spacetimedb.reducer(
     if (toGenerator.state !== "neutral" || toGenerator.ownerPlayerId !== "") {
       throw new Error("target generator must be neutral");
     }
+    if (
+      !isPlayerInRangeOfGenerator(
+        player,
+        toGenerator,
+        config.interactRangeCells,
+      )
+    ) {
+      throw new Error("player is out of interact range for root relocation");
+    }
 
     setGeneratorControl(ctx, toGenerator, "", "isolated");
     ctx.db.player.playerId.update({
@@ -1491,6 +2026,11 @@ export const startMoveRoot = spacetimedb.reducer(
       toGeneratorId: newGeneratorId,
       startTick: world.currentTick,
       finishTick: world.currentTick + rootMoveDurationTicks(config),
+    });
+    appendEvent(ctx, world.currentTick, "rootMoveStarted", {
+      playerId,
+      fromGeneratorId: player.rootGeneratorId,
+      toGeneratorId: newGeneratorId,
     });
   },
 );
@@ -1533,6 +2073,10 @@ export const buildLine = spacetimedb.reducer(
       ownerPlayerId: playerId,
       aGeneratorId: aMin,
       bGeneratorId: bMax,
+      aX: a.id <= b.id ? a.x : b.x,
+      aY: a.id <= b.id ? a.y : b.y,
+      bX: a.id <= b.id ? b.x : a.x,
+      bY: a.id <= b.id ? b.y : a.y,
       length,
       capacity: DEFAULT_LINE_CAPACITY,
       load: 0,
@@ -1607,6 +2151,27 @@ export const updateWorldConfig = spacetimedb.reducer(
   },
 );
 
+export const updateWorldViewConfig = spacetimedb.reducer(
+  {
+    worldWidth: t.u32(),
+    worldHeight: t.u32(),
+    tileSizePx: t.u16(),
+    interactRangeCells: t.u32(),
+  },
+  (ctx, { worldWidth, worldHeight, tileSizePx, interactRangeCells }) => {
+    const current = ensureWorldConfig(ctx);
+    const next: WorldConfigRow = {
+      ...current,
+      worldWidth,
+      worldHeight,
+      tileSizePx,
+      interactRangeCells,
+    };
+    waveTimingFromConfig(next);
+    ctx.db.worldConfig.id.update(next);
+  },
+);
+
 export const setTestAdminMode = spacetimedb.reducer(
   {
     enabled: t.bool(),
@@ -1667,7 +2232,8 @@ export const applyMove = spacetimedb.reducer(
     if (Math.abs(dx) + Math.abs(dy) > 1) {
       throw new Error("Move exceeds speed limit (1 cell per tick)");
     }
-    applyMoveInternal(ctx, playerId, dx, dy, currentTick);
+    const config = ensureWorldConfig(ctx);
+    applyMoveInternal(ctx, config, playerId, dx, dy, currentTick);
   },
 );
 

@@ -13,9 +13,12 @@ import DestroyLineReducer from "../destroy_line_reducer";
 import EnqueueActionReducer from "../enqueue_action_reducer";
 import JoinPlayerReducer from "../join_player_reducer";
 import PlaceRootReducer from "../place_root_reducer";
+import SetMoveTargetReducer from "../set_move_target_reducer";
 import SetTestAdminModeReducer from "../set_test_admin_mode_reducer";
 import StartMoveRootReducer from "../start_move_root_reducer";
+import StopMoveReducer from "../stop_move_reducer";
 import UpdateWorldConfigReducer from "../update_world_config_reducer";
+import UpdateWorldViewConfigReducer from "../update_world_view_config_reducer";
 
 export type AdminClaimGeneratorParams = __Infer<typeof AdminClaimGeneratorReducer>;
 export type ApplyMoveParams = __Infer<typeof ApplyMoveReducer>;
@@ -24,7 +27,10 @@ export type DestroyLineParams = __Infer<typeof DestroyLineReducer>;
 export type EnqueueActionParams = __Infer<typeof EnqueueActionReducer>;
 export type JoinPlayerParams = __Infer<typeof JoinPlayerReducer>;
 export type PlaceRootParams = __Infer<typeof PlaceRootReducer>;
+export type SetMoveTargetParams = __Infer<typeof SetMoveTargetReducer>;
 export type SetTestAdminModeParams = __Infer<typeof SetTestAdminModeReducer>;
 export type StartMoveRootParams = __Infer<typeof StartMoveRootReducer>;
+export type StopMoveParams = __Infer<typeof StopMoveReducer>;
 export type UpdateWorldConfigParams = __Infer<typeof UpdateWorldConfigReducer>;
+export type UpdateWorldViewConfigParams = __Infer<typeof UpdateWorldViewConfigReducer>;
 

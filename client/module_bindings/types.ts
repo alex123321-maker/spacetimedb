@@ -10,6 +10,14 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const EventLog = __t.object("EventLog", {
+  id: __t.string(),
+  tick: __t.u64(),
+  eventType: __t.string(),
+  payloadJson: __t.string(),
+});
+export type EventLog = __Infer<typeof EventLog>;
+
 export const Generator = __t.object("Generator", {
   id: __t.string(),
   x: __t.i32(),
@@ -25,11 +33,23 @@ export const Generator = __t.object("Generator", {
 });
 export type Generator = __Infer<typeof Generator>;
 
+export const Junk = __t.object("Junk", {
+  id: __t.string(),
+  x: __t.i32(),
+  y: __t.i32(),
+  kind: __t.i32(),
+});
+export type Junk = __Infer<typeof Junk>;
+
 export const Line = __t.object("Line", {
   id: __t.string(),
   ownerPlayerId: __t.string(),
   aGeneratorId: __t.string(),
   bGeneratorId: __t.string(),
+  aX: __t.i32(),
+  aY: __t.i32(),
+  bX: __t.i32(),
+  bY: __t.i32(),
   length: __t.i32(),
   capacity: __t.i32(),
   load: __t.i32(),
@@ -64,7 +84,12 @@ export const Player = __t.object("Player", {
   playerId: __t.string(),
   posX: __t.i64(),
   posY: __t.i64(),
+  targetX: __t.i32(),
+  targetY: __t.i32(),
+  moving: __t.bool(),
+  speedCellsPerTick: __t.u16(),
   lastProcessedTick: __t.u64(),
+  lastUpdatedTick: __t.u64(),
   rootGeneratorId: __t.string(),
   rootMoveAvailableAtTick: __t.u64(),
   networkDirty: __t.bool(),
@@ -117,6 +142,10 @@ export const WorldConfig = __t.object("WorldConfig", {
   markerLeadDays: __t.u32(),
   generatorLifeDays: __t.u32(),
   waveSize: __t.u32(),
+  worldWidth: __t.u32(),
+  worldHeight: __t.u32(),
+  tileSizePx: __t.u16(),
+  interactRangeCells: __t.u32(),
   enableTestAdmin: __t.bool(),
 });
 export type WorldConfig = __Infer<typeof WorldConfig>;
