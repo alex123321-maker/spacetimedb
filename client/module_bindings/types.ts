@@ -10,6 +10,13 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const Obstacle = __t.object("Obstacle", {
+  id: __t.string(),
+  x: __t.i32(),
+  y: __t.i32(),
+});
+export type Obstacle = __Infer<typeof Obstacle>;
+
 export const PendingAction = __t.object("PendingAction", {
   id: __t.string(),
   tick: __t.u64(),

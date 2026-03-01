@@ -10,9 +10,9 @@ function wait(ms: number): Promise<void> {
 
 type ReducerMap = Record<string, (args?: unknown) => unknown>;
 
-describe("SpacetimeDB integration", () => {
+describe("SpacetimeDB collision integration", () => {
   test.runIf(shouldRun)(
-    "Move through enqueue_action updates player position by fx(1)",
+    "Move into obstacle (1,0) is blocked",
     async () => {
       const host = process.env.STDB_HOST ?? "ws://127.0.0.1:3000";
       const dbName = process.env.STDB_DB_NAME ?? "continuum-grid";
@@ -34,8 +34,18 @@ describe("SpacetimeDB integration", () => {
 
       conn
         .subscriptionBuilder()
-        .subscribe([tables.player, tables.worldState, tables.pendingAction]);
+        .subscribe([tables.player, tables.worldState, tables.obstacle]);
       await wait(100);
+
+      const obstacles = Array.from(conn.db.obstacle.iter()) as Array<
+        Record<string, unknown>
+      >;
+      const hasObstacleAt10 = obstacles.some((obstacle) => {
+        const x = Number((obstacle.x ?? 0) as number);
+        const y = Number((obstacle.y ?? 0) as number);
+        return x === 1 && y === 0;
+      });
+      expect(hasObstacleAt10).toBe(true);
 
       const reducers = conn.reducers as unknown as ReducerMap;
       const callReducer = (names: string[], args?: unknown): void => {
@@ -63,7 +73,7 @@ describe("SpacetimeDB integration", () => {
         actionType: "Move",
         tick: BigInt(currentTick + 1),
         seq: 1n,
-        payloadJson: JSON.stringify({ dx: 0, dy: 1 })
+        payloadJson: JSON.stringify({ dx: 1, dy: 0 })
       });
 
       await wait(250);
@@ -76,8 +86,10 @@ describe("SpacetimeDB integration", () => {
       );
 
       expect(me).toBeDefined();
+      const posX = Number((me?.posX ?? me?.pos_x ?? 0n) as bigint);
       const posY = Number((me?.posY ?? me?.pos_y ?? 0n) as bigint);
-      expect(posY).toBe(fx(1));
+      expect(posX).toBe(fx(0));
+      expect(posY).toBe(fx(0));
     },
     15_000
   );

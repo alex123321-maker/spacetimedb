@@ -42,14 +42,20 @@ interface PendingActionRow {
   dy: number;
 }
 
+interface ObstacleRow {
+  id: string;
+  x: number;
+  y: number;
+}
+
 const worldStateTable = table(
   { public: true },
   {
     id: t.string().primaryKey(),
     currentTick: t.u64(),
     tickRate: t.u16(),
-    seed: t.u32()
-  }
+    seed: t.u32(),
+  },
 );
 
 const playerTable = table(
@@ -58,8 +64,8 @@ const playerTable = table(
     playerId: t.string().primaryKey(),
     posX: t.i64(),
     posY: t.i64(),
-    lastProcessedTick: t.u64()
-  }
+    lastProcessedTick: t.u64(),
+  },
 );
 
 const playerSessionTable = table(
@@ -68,8 +74,8 @@ const playerSessionTable = table(
     playerId: t.string().primaryKey(),
     lastSeq: t.u64(),
     actionBudget: t.u16(),
-    lastBudgetTick: t.u64()
-  }
+    lastBudgetTick: t.u64(),
+  },
 );
 
 const pendingActionTable = table(
@@ -82,19 +88,28 @@ const pendingActionTable = table(
     actionType: t.string(),
     payloadJson: t.string(),
     dx: t.i32(),
-    dy: t.i32()
-  }
+    dy: t.i32(),
+  },
+);
+
+const obstacleTable = table(
+  { public: true },
+  {
+    id: t.string().primaryKey(),
+    x: t.i32(),
+    y: t.i32(),
+  },
 );
 
 const tickScheduleTable = table(
   {
     public: false,
-    scheduled: () => scheduledTickRef
+    scheduled: () => scheduledTickRef,
   },
   {
     scheduled_id: t.u64().primaryKey(),
-    scheduled_at: t.scheduleAt()
-  }
+    scheduled_at: t.scheduleAt(),
+  },
 );
 
 const spacetimedb = schema({
@@ -102,7 +117,8 @@ const spacetimedb = schema({
   player: playerTable,
   playerSession: playerSessionTable,
   pendingAction: pendingActionTable,
-  tickSchedule: tickScheduleTable
+  obstacle: obstacleTable,
+  tickSchedule: tickScheduleTable,
 });
 
 export default spacetimedb;
@@ -120,30 +136,56 @@ function cmpString(a: string, b: string): number {
 }
 
 function ensureWorldState(ctx: any): WorldStateRow {
-  const existing = ctx.db.worldState.id.find(WORLD_STATE_ID) as
-    | WorldStateRow
-    | null;
+  const existing = ctx.db.worldState.id.find(
+    WORLD_STATE_ID,
+  ) as WorldStateRow | null;
   if (existing) return existing;
 
   const created = {
     id: WORLD_STATE_ID,
     currentTick: 0n,
     tickRate: TICK_RATE,
-    seed: SEED
+    seed: SEED,
   };
   ctx.db.worldState.insert(created);
   return created;
 }
 
 function ensureTickSchedule(ctx: any): void {
-  const existing = ctx.db.tickSchedule.scheduled_id.find(TICK_SCHEDULER_ID) as
-    | { scheduled_id: bigint; scheduled_at: unknown }
-    | null;
+  const existing = ctx.db.tickSchedule.scheduled_id.find(TICK_SCHEDULER_ID) as {
+    scheduled_id: bigint;
+    scheduled_at: unknown;
+  } | null;
   if (existing) return;
   ctx.db.tickSchedule.insert({
     scheduled_id: TICK_SCHEDULER_ID,
-    scheduled_at: ScheduleAt.interval(TICK_INTERVAL_MICROS)
+    scheduled_at: ScheduleAt.interval(TICK_INTERVAL_MICROS),
   });
+}
+
+const SEEDED_OBSTACLES: readonly ObstacleRow[] = [
+  { id: "1:-2", x: 1, y: -2 },
+  { id: "1:-1", x: 1, y: -1 },
+  { id: "1:0", x: 1, y: 0 },
+  { id: "1:1", x: 1, y: 1 },
+  { id: "1:2", x: 1, y: 2 },
+];
+
+function obstacleId(x: bigint, y: bigint): string {
+  return `${x.toString()}:${y.toString()}`;
+}
+
+function ensureObstacles(ctx: any): void {
+  for (const obstacle of SEEDED_OBSTACLES) {
+    if (ctx.db.obstacle.id.find(obstacle.id)) {
+      continue;
+    }
+    ctx.db.obstacle.insert(obstacle);
+  }
+}
+
+function isBlockedCell(ctx: any, cellX: bigint, cellY: bigint): boolean {
+  return Boolean(ctx.db.obstacle.id.find(obstacleId(cellX, cellY)));
 }
 
 function payloadToMove(payloadJson: string): { dx: number; dy: number } {
@@ -175,16 +217,25 @@ function applyMoveInternal(
   playerId: string,
   dx: number,
   dy: number,
-  currentTick: bigint
+  currentTick: bigint,
 ): void {
   const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
   if (!player) return;
+
+  const currentCellX = player.posX / FIXED_SCALE;
+  const currentCellY = player.posY / FIXED_SCALE;
+  const nextCellX = currentCellX + BigInt(dx);
+  const nextCellY = currentCellY + BigInt(dy);
+
+  if (isBlockedCell(ctx, nextCellX, nextCellY)) {
+    return;
+  }
 
   const next = {
     ...player,
     posX: player.posX + BigInt(dx) * FIXED_SCALE,
     posY: player.posY + BigInt(dy) * FIXED_SCALE,
-    lastProcessedTick: currentTick
+    lastProcessedTick: currentTick,
   };
   ctx.db.player.playerId.update(next);
 }
@@ -193,9 +244,9 @@ function processTick(ctx: any): void {
   const world = ensureWorldState(ctx);
   const currentTick = world.currentTick;
 
-  const due = (Array.from(ctx.db.pendingAction.iter()) as PendingActionRow[]).filter(
-    (action) => action.tick <= currentTick
-  );
+  const due = (
+    Array.from(ctx.db.pendingAction.iter()) as PendingActionRow[]
+  ).filter((action) => action.tick <= currentTick);
 
   due.sort((a, b) => {
     return (
@@ -213,7 +264,7 @@ function processTick(ctx: any): void {
         action.playerId,
         action.dx,
         action.dy,
-        currentTick
+        currentTick,
       );
     }
     ctx.db.pendingAction.id.delete(action.id);
@@ -224,49 +275,51 @@ function processTick(ctx: any): void {
     ctx.db.playerSession.playerId.update({
       ...session,
       actionBudget: ACTION_BUDGET_PER_TICK,
-      lastBudgetTick: nextTick
+      lastBudgetTick: nextTick,
     });
   }
 
   ctx.db.worldState.id.update({
     ...world,
-    currentTick: nextTick
+    currentTick: nextTick,
   });
 }
 
 export const init = spacetimedb.init((ctx) => {
   ensureWorldState(ctx);
+  ensureObstacles(ctx);
   ensureTickSchedule(ctx);
 });
 
 export const onConnect = spacetimedb.clientConnected((ctx) => {
   ensureWorldState(ctx);
+  ensureObstacles(ctx);
 });
 
 export const joinPlayer = spacetimedb.reducer((ctx) => {
   const world = ensureWorldState(ctx);
   const playerId = ctx.sender.toHexString();
-  const existingPlayer = ctx.db.player.playerId.find(playerId) as
-    | PlayerRow
-    | null;
+  const existingPlayer = ctx.db.player.playerId.find(
+    playerId,
+  ) as PlayerRow | null;
   if (!existingPlayer) {
     ctx.db.player.insert({
       playerId,
       posX: 0n,
       posY: 0n,
-      lastProcessedTick: world.currentTick
+      lastProcessedTick: world.currentTick,
     });
   }
 
-  const existingSession = ctx.db.playerSession.playerId.find(playerId) as
-    | PlayerSessionRow
-    | null;
+  const existingSession = ctx.db.playerSession.playerId.find(
+    playerId,
+  ) as PlayerSessionRow | null;
   if (!existingSession) {
     ctx.db.playerSession.insert({
       playerId,
       lastSeq: 0n,
       actionBudget: ACTION_BUDGET_PER_TICK,
-      lastBudgetTick: world.currentTick
+      lastBudgetTick: world.currentTick,
     });
   }
 });
@@ -276,14 +329,14 @@ export const enqueueAction = spacetimedb.reducer(
     actionType: t.string(),
     tick: t.u64(),
     seq: t.u64(),
-    payloadJson: t.string()
+    payloadJson: t.string(),
   },
   (ctx, { actionType, tick, seq, payloadJson }) => {
     const world = ensureWorldState(ctx);
     const playerId = ctx.sender.toHexString();
-    const session = ctx.db.playerSession.playerId.find(playerId) as
-      | PlayerSessionRow
-      | null;
+    const session = ctx.db.playerSession.playerId.find(
+      playerId,
+    ) as PlayerSessionRow | null;
     if (!session) {
       throw new Error("player must call joinPlayer first");
     }
@@ -294,7 +347,7 @@ export const enqueueAction = spacetimedb.reducer(
         : {
             ...session,
             actionBudget: ACTION_BUDGET_PER_TICK,
-            lastBudgetTick: world.currentTick
+            lastBudgetTick: world.currentTick,
           };
 
     if (tick < world.currentTick) {
@@ -325,15 +378,15 @@ export const enqueueAction = spacetimedb.reducer(
       actionType,
       payloadJson,
       dx,
-      dy
+      dy,
     });
 
     ctx.db.playerSession.playerId.update({
       ...sessionForTick,
       lastSeq: seq,
-      actionBudget: sessionForTick.actionBudget - 1
+      actionBudget: sessionForTick.actionBudget - 1,
     });
-  }
+  },
 );
 
 export const applyMove = spacetimedb.reducer(
@@ -341,7 +394,7 @@ export const applyMove = spacetimedb.reducer(
     playerId: t.string(),
     dx: t.i32(),
     dy: t.i32(),
-    currentTick: t.u64()
+    currentTick: t.u64(),
   },
   (ctx, { playerId, dx, dy, currentTick }) => {
     if (!ctx.senderAuth.isInternal) {
@@ -351,7 +404,7 @@ export const applyMove = spacetimedb.reducer(
       throw new Error("Move exceeds speed limit (1 cell per tick)");
     }
     applyMoveInternal(ctx, playerId, dx, dy, currentTick);
-  }
+  },
 );
 
 export const tick = (scheduledTickRef = spacetimedb.reducer(
@@ -361,5 +414,5 @@ export const tick = (scheduledTickRef = spacetimedb.reducer(
       throw new Error("tick is internal-only");
     }
     processTick(ctx);
-  }
+  },
 ));

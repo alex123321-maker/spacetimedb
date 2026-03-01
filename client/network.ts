@@ -17,6 +17,12 @@ export interface PlayerSnapshot {
   lastProcessedTick: bigint;
 }
 
+export interface ObstacleCell {
+  id: string;
+  x: number;
+  y: number;
+}
+
 export interface MoveCommandEnvelope {
   type: "Move";
   tick: number;
@@ -55,7 +61,7 @@ export class SpacetimeClient {
             const current = this.getOwnPlayer();
             if (current) onPlayer(current);
           })
-          .subscribe([tables.player, tables.worldState]);
+          .subscribe([tables.player, tables.worldState, tables.obstacle]);
 
         conn.db.player.onInsert(() => {
           const current = this.getOwnPlayer();
@@ -126,6 +132,25 @@ export class SpacetimeClient {
       lastProcessedTick:
         readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n
     };
+  }
+
+  getObstacles(): ObstacleCell[] {
+    if (!this.conn) return [];
+    const rows = Array.from(this.conn.db.obstacle.iter()) as PlainObject[];
+    const obstacles = rows.map((row) => ({
+      id: readField<string>(row, "id") ?? "",
+      x: readField<number>(row, "x") ?? 0,
+      y: readField<number>(row, "y") ?? 0
+    }));
+
+    obstacles.sort((a, b) => {
+      if (a.y !== b.y) return a.y - b.y;
+      if (a.x !== b.x) return a.x - b.x;
+      if (a.id < b.id) return -1;
+      if (a.id > b.id) return 1;
+      return 0;
+    });
+    return obstacles;
   }
 
   private callReducer(names: string[], args?: PlainObject): void {

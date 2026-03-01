@@ -41,6 +41,7 @@ import JoinPlayerReducer from "./join_player_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import ObstacleRow from "./obstacle_table";
 import PendingActionRow from "./pending_action_table";
 import PlayerRow from "./player_table";
 import WorldStateRow from "./world_state_table";
@@ -49,6 +50,17 @@ import WorldStateRow from "./world_state_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  obstacle: __table({
+    name: 'obstacle',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'obstacle_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ObstacleRow),
   pendingAction: __table({
     name: 'pending_action',
     indexes: [
