@@ -1,3 +1,5 @@
 node_modules/
 coverage/
 dist/
+.env.local
+.stdb-data/

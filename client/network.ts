@@ -1,66 +1,146 @@
-import type { GameServer } from "../server/index";
-import type { MovePayload } from "../server/tables/pendingAction";
-import type { Player } from "../server/tables/player";
+import { type Identity } from "spacetimedb";
+import { DbConnection, tables } from "./module_bindings";
+import type { MovePayload } from "./ui";
 
-let sessionOrdinal = 1;
+const HOST = (globalThis as { __STDB_HOST__?: string }).__STDB_HOST__ ??
+  "ws://127.0.0.1:3000";
+const DB_NAME = (globalThis as { __STDB_DB_NAME__?: string }).__STDB_DB_NAME__ ??
+  "continuum-grid";
 
-export interface OutgoingAction {
-  type: string;
-  tick: number;
-  seq: number;
-  payload: unknown;
+type ReducerMap = Record<string, (args?: unknown) => unknown>;
+type PlainObject = Record<string, unknown>;
+
+export interface PlayerSnapshot {
+  playerId: string;
+  posX: bigint;
+  posY: bigint;
+  lastProcessedTick: bigint;
 }
 
-export class LocalRealtimeClient {
-  private server: GameServer | null = null;
-  private sessionId: string | null = null;
+export interface MoveCommandEnvelope {
+  type: "Move";
+  tick: number;
+  seq: number;
+  payload: MovePayload;
+}
+
+function readField<T>(row: PlainObject, ...keys: string[]): T | undefined {
+  for (const key of keys) {
+    if (key in row) return row[key] as T;
+  }
+  return undefined;
+}
+
+export class SpacetimeClient {
+  private conn: DbConnection | null = null;
   private playerId: string | null = null;
   private seq = 0;
 
-  connect(server: GameServer, requestedPlayerId?: string): string {
-    if (this.server) {
-      if (!this.playerId) {
-        throw new Error("connected state invalid: playerId is null");
-      }
-      return this.playerId;
-    }
+  connect(onPlayer: (player: PlayerSnapshot) => void): DbConnection {
+    if (this.conn) return this.conn;
 
-    this.server = server;
-    this.sessionId = `session-${sessionOrdinal}`;
-    sessionOrdinal += 1;
+    this.conn = DbConnection.builder()
+      .withUri(HOST)
+      .withDatabaseName(DB_NAME)
+      .withToken(localStorage.getItem("auth_token") || undefined)
+      .onConnect((conn: DbConnection, identity: Identity, token: string) => {
+        localStorage.setItem("auth_token", token);
+        this.playerId = identity.toHexString();
 
-    const player = this.server.joinPlayer({
-      sessionId: this.sessionId,
-      playerId: requestedPlayerId
-    });
-    this.playerId = player.playerId;
-    return player.playerId;
+        this.callReducer(["joinPlayer", "join_player"]);
+
+        conn
+          .subscriptionBuilder()
+          .onApplied(() => {
+            const current = this.getOwnPlayer();
+            if (current) onPlayer(current);
+          })
+          .subscribe([tables.player, tables.worldState]);
+
+        conn.db.player.onInsert(() => {
+          const current = this.getOwnPlayer();
+          if (current) onPlayer(current);
+        });
+        conn.db.player.onUpdate(() => {
+          const current = this.getOwnPlayer();
+          if (current) onPlayer(current);
+        });
+      })
+      .onConnectError((_ctx, error: Error) => {
+        console.error("SpacetimeDB connect error:", error);
+      })
+      .onDisconnect(() => {
+        console.warn("Disconnected from SpacetimeDB");
+      })
+      .build();
+
+    return this.conn;
   }
 
-  sendAction(type: string, payload: unknown): OutgoingAction {
-    if (!this.server || !this.sessionId) {
-      throw new Error("client is not connected");
+  sendMove(payload: MovePayload): MoveCommandEnvelope {
+    if (!this.conn) {
+      throw new Error("Not connected");
     }
+
     this.seq += 1;
-    const tick = this.server.world.worldState.currentTick + 1;
-    const message: OutgoingAction = {
-      type,
-      tick,
+    const currentTick = this.getCurrentTick();
+    const message: MoveCommandEnvelope = {
+      type: "Move",
+      tick: currentTick + 1,
       seq: this.seq,
       payload
     };
-    this.server.enqueueAction(this.sessionId, message);
+
+    this.callReducer(["enqueueAction", "enqueue_action"], {
+      actionType: message.type,
+      tick: BigInt(message.tick),
+      seq: BigInt(message.seq),
+      payloadJson: JSON.stringify(message.payload)
+    });
     return message;
   }
 
-  sendMove(payload: MovePayload): OutgoingAction {
-    return this.sendAction("Move", payload);
+  private getCurrentTick(): number {
+    if (!this.conn) return 0;
+    const world = Array.from(this.conn.db.worldState.iter())[0] as
+      | PlainObject
+      | undefined;
+    if (!world) return 0;
+    const tick = readField<bigint>(world, "currentTick", "current_tick") ?? 0n;
+    return Number(tick);
   }
 
-  subscribeToOwnPlayer(cb: (player: Player) => void): () => void {
-    if (!this.server || !this.playerId) {
-      throw new Error("client is not connected");
+  private getOwnPlayer(): PlayerSnapshot | null {
+    if (!this.conn || !this.playerId) return null;
+    const rows = Array.from(this.conn.db.player.iter()) as PlainObject[];
+    const row = rows.find((candidate) => {
+      const id = readField<string>(candidate, "playerId", "player_id");
+      return id === this.playerId;
+    });
+    if (!row) return null;
+
+    return {
+      playerId: readField<string>(row, "playerId", "player_id") ?? this.playerId,
+      posX: readField<bigint>(row, "posX", "pos_x") ?? 0n,
+      posY: readField<bigint>(row, "posY", "pos_y") ?? 0n,
+      lastProcessedTick:
+        readField<bigint>(row, "lastProcessedTick", "last_processed_tick") ?? 0n
+    };
+  }
+
+  private callReducer(names: string[], args?: PlainObject): void {
+    if (!this.conn) {
+      throw new Error("Not connected");
     }
-    return this.server.subscribePlayer(this.playerId, cb);
+    const reducers = this.conn.reducers as unknown as ReducerMap;
+    for (const name of names) {
+      const fn = reducers[name];
+      if (typeof fn === "function") {
+        if (args) fn(args);
+        else fn();
+        return;
+      }
+    }
+    throw new Error(`Reducer not found. Tried: ${names.join(", ")}`);
   }
 }

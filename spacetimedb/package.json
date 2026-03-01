@@ -1,0 +1,16 @@
+{
+  "name": "continuum-grid-module",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe build --module-path .",
+    "publish:local": "D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe publish --module-path . --server local --yes"
+  },
+  "dependencies": {
+    "spacetimedb": "^2.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}

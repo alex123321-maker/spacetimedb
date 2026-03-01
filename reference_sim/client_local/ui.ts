@@ -1,25 +1,18 @@
-export interface MovePayload {
-  dx: number;
-  dy: number;
-}
+import type { MovePayload } from "../server/tables/pendingAction";
 
 export function mapInputToMove(input: string): MovePayload | null {
   switch (input) {
     case "ArrowUp":
     case "w":
-    case "W":
       return { dx: 0, dy: -1 };
     case "ArrowDown":
     case "s":
-    case "S":
       return { dx: 0, dy: 1 };
     case "ArrowLeft":
     case "a":
-    case "A":
       return { dx: -1, dy: 0 };
     case "ArrowRight":
     case "d":
-    case "D":
       return { dx: 1, dy: 0 };
     default:
       return null;

@@ -1,4 +1,4 @@
-import type { Fixed } from "../../shared/fixed";
+import type { Fixed } from "../../../shared/fixed";
 
 export interface Player {
   playerId: string;

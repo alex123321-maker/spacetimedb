@@ -1,4 +1,4 @@
-import { add, fx } from "../../shared/fixed";
+import { add, fx } from "../../../shared/fixed";
 import type { PendingAction } from "../tables/pendingAction";
 import type { WorldStore } from "../world";
 import { emitPlayerUpdated } from "../world";

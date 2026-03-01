@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { createServer } from "../server/index";
+import { createServer } from "../reference_sim/server/index";
 
 describe("tick loop", () => {
   test("currentTick increments on each Tick reducer call", () => {

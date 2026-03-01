@@ -1,4 +1,4 @@
-import { fx } from "../../shared/fixed";
+import { fx } from "../../../shared/fixed";
 import {
   allocatePlayerId,
   emitPlayerUpdated,

@@ -9,7 +9,8 @@
   },
   "include": [
     "client/**/*.ts",
-    "server/**/*.ts",
+    "spacetimedb/**/*.ts",
+    "reference_sim/**/*.ts",
     "shared/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts"

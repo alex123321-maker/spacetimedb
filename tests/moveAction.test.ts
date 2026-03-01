@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { createServer } from "../server/index";
+import { createServer } from "../reference_sim/server/index";
 import { fx } from "../shared/fixed";
 
 describe("move actions", () => {

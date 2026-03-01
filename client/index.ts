@@ -1,31 +1,21 @@
-import type { GameServer } from "../server/index";
-import { LocalRealtimeClient } from "./network";
+import { toFloat } from "../shared/fixed";
+import { SpacetimeClient } from "./network";
 import { mapInputToMove } from "./ui";
 
-export interface ClientApp {
-  playerId: string;
-  client: LocalRealtimeClient;
-  handleInput: (input: string) => void;
-  dispose: () => void;
+const client = new SpacetimeClient();
+
+function renderPosition(x: bigint, y: bigint): void {
+  const el = document.getElementById("player-pos");
+  if (!el) return;
+  el.textContent = `x=${toFloat(Number(x)).toFixed(3)} y=${toFloat(Number(y)).toFixed(3)}`;
 }
 
-export function bootClient(server: GameServer): ClientApp {
-  const client = new LocalRealtimeClient();
-  const playerId = client.connect(server);
-  const unsubscribe = client.subscribeToOwnPlayer(() => {
-    // UI rendering hook: real app updates local scene here.
-  });
+client.connect((player) => {
+  renderPosition(player.posX, player.posY);
+});
 
-  return {
-    playerId,
-    client,
-    handleInput(input: string): void {
-      const move = mapInputToMove(input);
-      if (!move) return;
-      client.sendMove(move);
-    },
-    dispose(): void {
-      unsubscribe();
-    }
-  };
-}
+window.addEventListener("keydown", (event) => {
+  const move = mapInputToMove(event.key);
+  if (!move) return;
+  client.sendMove(move);
+});

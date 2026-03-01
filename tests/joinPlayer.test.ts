@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { createServer } from "../server/index";
+import { createServer } from "../reference_sim/server/index";
 import { fx } from "../shared/fixed";
-import { ACTION_BUDGET_PER_TICK } from "../server/tables/playerSession";
+import { ACTION_BUDGET_PER_TICK } from "../reference_sim/server/tables/playerSession";
 
 describe("joinPlayer reducer", () => {
   test("creates Player + PlayerSession for new session", () => {

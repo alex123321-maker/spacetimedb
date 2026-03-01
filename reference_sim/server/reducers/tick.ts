@@ -1,4 +1,4 @@
-import { cmpBy, cmpId, cmpU32, stableSort } from "../../shared/determinism";
+import { cmpBy, cmpId, cmpU32, stableSort } from "../../../shared/determinism";
 import { ACTION_BUDGET_PER_TICK } from "../tables/playerSession";
 import type { PendingAction } from "../tables/pendingAction";
 import {
