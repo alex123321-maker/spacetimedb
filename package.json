@@ -17,6 +17,7 @@
     "spacetime:generate": "set NO_PROXY=127.0.0.1,localhost&& D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe generate continuum-grid --lang typescript --out-dir client/module_bindings --module-path spacetimedb --yes"
   },
   "dependencies": {
+    "pixi.js": "^8.16.0",
     "spacetimedb": "^2.0.2"
   },
   "devDependencies": {
