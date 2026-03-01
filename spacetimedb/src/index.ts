@@ -20,6 +20,11 @@ const DEFAULT_TICKS_PER_MINUTE = 1;
 const ROOT_MOVE_COOLDOWN_DAYS = 24;
 const ROOT_MOVE_DURATION_MINUTES = 10;
 const DEFAULT_LINE_CAPACITY = 150;
+const DEFAULT_GENERATOR_OUTPUT = 100;
+const LINE_COOLDOWN_MINUTES = 2;
+const LINE_COOL_RATE_PER_TICK = 1;
+const NETWORK_SOLVE_SAFETY_TICKS = 20n;
+const MAX_NETWORK_SOLVE_PASSES = 8;
 
 const MAP_SIZE_CELLS = 128;
 const MIN_GENERATOR_DIST_CELLS = 10;
@@ -94,6 +99,10 @@ interface GeneratorRow {
   expireTick: bigint;
   ownerPlayerId: string;
   state: string;
+  isConnected: boolean;
+  output: number;
+  effectiveOutput: number;
+  lastNetworkSolveTick: bigint;
 }
 
 interface LineRow {
@@ -101,8 +110,11 @@ interface LineRow {
   ownerPlayerId: string;
   aGeneratorId: string;
   bGeneratorId: string;
+  length: number;
   capacity: number;
+  load: number;
   temp: number;
+  overheated: boolean;
   active: boolean;
   cooldownUntilTick: bigint;
   createdAtTick: bigint;
@@ -224,6 +236,10 @@ const generatorTable = table(
     expireTick: t.u64(),
     ownerPlayerId: t.string(),
     state: t.string(),
+    isConnected: t.bool(),
+    output: t.i32(),
+    effectiveOutput: t.i32(),
+    lastNetworkSolveTick: t.u64(),
   },
 );
 
@@ -234,8 +250,11 @@ const lineTable = table(
     ownerPlayerId: t.string(),
     aGeneratorId: t.string(),
     bGeneratorId: t.string(),
+    length: t.i32(),
     capacity: t.i32(),
+    load: t.i32(),
     temp: t.i32(),
+    overheated: t.bool(),
     active: t.bool(),
     cooldownUntilTick: t.u64(),
     createdAtTick: t.u64(),
@@ -361,6 +380,16 @@ function distSq(a: GridCell, b: GridCell): number {
   return dx * dx + dy * dy;
 }
 
+function manhattanDistance(a: GridCell, b: GridCell): number {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
 function isFarEnough(
   candidate: GridCell,
   selected: GridCell[],
@@ -467,11 +496,25 @@ function setGeneratorControl(
   ownerPlayerId: string,
   state: "neutral" | "controlled" | "isolated",
 ): void {
+  const isConnected =
+    ownerPlayerId !== "" && state === "controlled"
+      ? generator.isConnected
+      : false;
+  const effectiveOutput =
+    ownerPlayerId !== "" && state === "controlled"
+      ? generator.effectiveOutput
+      : 0;
   ctx.db.generator.id.update({
     ...generator,
     ownerPlayerId,
     state,
+    isConnected,
+    effectiveOutput,
   });
+}
+
+function lineCooldownTicks(config: WorldConfigRow): bigint {
+  return BigInt(config.ticksPerMinute) * BigInt(LINE_COOLDOWN_MINUTES);
 }
 
 function countControlledGenerators(ctx: any, playerId: string): number {
@@ -602,6 +645,10 @@ function materializeWaveGenerators(
         expireTick: currentTick + timing.generatorLifeTicks,
         ownerPlayerId: "",
         state: "neutral",
+        isConnected: false,
+        output: DEFAULT_GENERATOR_OUTPUT,
+        effectiveOutput: 0,
+        lastNetworkSolveTick: currentTick,
       });
     }
     ctx.db.spawnMarker.id.delete(marker.id);
@@ -827,6 +874,328 @@ function applyMoveInternal(
   });
 }
 
+interface SolveEdge {
+  to: string;
+  lineId: string;
+  weight: number;
+}
+
+interface DijkstraResult {
+  connected: Set<string>;
+  dist: Map<string, number>;
+  parentGen: Map<string, string>;
+  parentLine: Map<string, string>;
+}
+
+function pickBestUnvisited(
+  nodes: string[],
+  visited: Set<string>,
+  dist: Map<string, number>,
+): string | null {
+  let best: string | null = null;
+  let bestDist = Number.MAX_SAFE_INTEGER;
+  for (const nodeId of nodes) {
+    if (visited.has(nodeId)) continue;
+    const nodeDist = dist.get(nodeId) ?? Number.MAX_SAFE_INTEGER;
+    if (nodeDist < bestDist) {
+      best = nodeId;
+      bestDist = nodeDist;
+      continue;
+    }
+    if (nodeDist === bestDist && best !== null && nodeId < best) {
+      best = nodeId;
+    }
+  }
+  return best;
+}
+
+function runDijkstraFromRoot(
+  nodes: string[],
+  rootGeneratorId: string,
+  adjacency: Map<string, SolveEdge[]>,
+): DijkstraResult {
+  const dist = new Map<string, number>();
+  const parentGen = new Map<string, string>();
+  const parentLine = new Map<string, string>();
+  for (const nodeId of nodes) {
+    dist.set(nodeId, Number.MAX_SAFE_INTEGER);
+  }
+  if (!dist.has(rootGeneratorId)) {
+    return { connected: new Set(), dist, parentGen, parentLine };
+  }
+  dist.set(rootGeneratorId, 0);
+
+  const visited = new Set<string>();
+  while (true) {
+    const current = pickBestUnvisited(nodes, visited, dist);
+    if (!current) break;
+    const currentDist = dist.get(current) ?? Number.MAX_SAFE_INTEGER;
+    if (currentDist === Number.MAX_SAFE_INTEGER) break;
+    visited.add(current);
+
+    const edges = adjacency.get(current) ?? [];
+    for (const edge of edges) {
+      const nextDist = currentDist + edge.weight;
+      const oldDist = dist.get(edge.to) ?? Number.MAX_SAFE_INTEGER;
+      if (nextDist < oldDist) {
+        dist.set(edge.to, nextDist);
+        parentGen.set(edge.to, current);
+        parentLine.set(edge.to, edge.lineId);
+        continue;
+      }
+      if (nextDist !== oldDist) continue;
+
+      const oldParent = parentGen.get(edge.to);
+      const oldParentLine = parentLine.get(edge.to);
+      if (!oldParent || !oldParentLine) {
+        parentGen.set(edge.to, current);
+        parentLine.set(edge.to, edge.lineId);
+        continue;
+      }
+      if (
+        current < oldParent ||
+        (current === oldParent && edge.lineId < oldParentLine)
+      ) {
+        parentGen.set(edge.to, current);
+        parentLine.set(edge.to, edge.lineId);
+      }
+    }
+  }
+
+  const connected = new Set<string>();
+  for (const nodeId of nodes) {
+    if (
+      (dist.get(nodeId) ?? Number.MAX_SAFE_INTEGER) !== Number.MAX_SAFE_INTEGER
+    ) {
+      connected.add(nodeId);
+    }
+  }
+  return { connected, dist, parentGen, parentLine };
+}
+
+function solvePlayerNetwork(
+  ctx: any,
+  config: WorldConfigRow,
+  currentTick: bigint,
+  playerId: string,
+): void {
+  const player = ctx.db.player.playerId.find(playerId) as PlayerRow | null;
+  if (!player) return;
+
+  const controlledGenerators = (
+    Array.from(ctx.db.generator.iter()) as GeneratorRow[]
+  )
+    .filter(
+      (generator) =>
+        generator.ownerPlayerId === playerId &&
+        generator.state === "controlled",
+    )
+    .sort((a, b) => cmpString(a.id, b.id));
+  const generatorById = new Map(
+    controlledGenerators.map((generator) => [generator.id, generator]),
+  );
+
+  let lines = (Array.from(ctx.db.line.iter()) as LineRow[])
+    .filter((line) => line.ownerPlayerId === playerId)
+    .sort((a, b) => cmpString(a.id, b.id));
+
+  const cooldownTicks = lineCooldownTicks(config);
+  let lastConnected = new Set<string>();
+
+  for (let pass = 0; pass < MAX_NETWORK_SOLVE_PASSES; pass += 1) {
+    const normalizedLines: LineRow[] = [];
+    for (const line of lines) {
+      let next = line;
+      const a = generatorById.get(line.aGeneratorId);
+      const b = generatorById.get(line.bGeneratorId);
+      const expectedLength =
+        a && b
+          ? manhattanDistance({ x: a.x, y: a.y }, { x: b.x, y: b.y })
+          : line.length;
+      if (line.length !== expectedLength) {
+        next = { ...next, length: expectedLength };
+      }
+
+      const shouldBeActive = line.cooldownUntilTick <= currentTick;
+      if (line.active !== shouldBeActive) {
+        next = { ...next, active: shouldBeActive };
+      }
+      normalizedLines.push(next);
+    }
+    lines = normalizedLines;
+
+    const adjacency = new Map<string, SolveEdge[]>();
+    for (const generator of controlledGenerators) {
+      adjacency.set(generator.id, []);
+    }
+
+    for (const line of lines) {
+      if (!line.active) continue;
+      const a = generatorById.get(line.aGeneratorId);
+      const b = generatorById.get(line.bGeneratorId);
+      if (!a || !b) continue;
+
+      const weight = line.length;
+      (adjacency.get(a.id) as SolveEdge[]).push({
+        to: b.id,
+        lineId: line.id,
+        weight,
+      });
+      (adjacency.get(b.id) as SolveEdge[]).push({
+        to: a.id,
+        lineId: line.id,
+        weight,
+      });
+    }
+
+    for (const edges of adjacency.values()) {
+      edges.sort((x, y) => {
+        if (x.weight !== y.weight) return x.weight - y.weight;
+        if (x.to !== y.to) return cmpString(x.to, y.to);
+        return cmpString(x.lineId, y.lineId);
+      });
+    }
+
+    const nodeIds = controlledGenerators.map((generator) => generator.id);
+    const dijkstra = runDijkstraFromRoot(
+      nodeIds,
+      player.rootGeneratorId,
+      adjacency,
+    );
+    const nodeFlow = new Map<string, number>();
+    for (const generator of controlledGenerators) {
+      nodeFlow.set(
+        generator.id,
+        dijkstra.connected.has(generator.id) ? generator.output : 0,
+      );
+    }
+
+    const lineLoads = new Map<string, number>();
+    for (const line of lines) {
+      lineLoads.set(line.id, 0);
+    }
+
+    const descending = controlledGenerators.slice().sort((x, y) => {
+      const dx = dijkstra.dist.get(x.id) ?? Number.MAX_SAFE_INTEGER;
+      const dy = dijkstra.dist.get(y.id) ?? Number.MAX_SAFE_INTEGER;
+      if (dx !== dy) return dy - dx;
+      return cmpString(x.id, y.id);
+    });
+
+    for (const generator of descending) {
+      if (generator.id === player.rootGeneratorId) continue;
+      if (!dijkstra.connected.has(generator.id)) continue;
+
+      const parentId = dijkstra.parentGen.get(generator.id);
+      const parentLineId = dijkstra.parentLine.get(generator.id);
+      if (!parentId || !parentLineId) continue;
+
+      const flow = nodeFlow.get(generator.id) ?? 0;
+      lineLoads.set(parentLineId, (lineLoads.get(parentLineId) ?? 0) + flow);
+      nodeFlow.set(parentId, (nodeFlow.get(parentId) ?? 0) + flow);
+    }
+
+    let disabledByOverheat = false;
+    const nextLines: LineRow[] = [];
+    for (const line of lines) {
+      const load = line.active ? (lineLoads.get(line.id) ?? 0) : 0;
+      const heat =
+        line.capacity > 0 ? Math.floor((load * 10) / line.capacity) : 0;
+      const temp = clampInt(line.temp + heat - LINE_COOL_RATE_PER_TICK, 0, 200);
+      const overheated = temp >= 100;
+      let active = line.active;
+      let cooldownUntilTick = line.cooldownUntilTick;
+
+      if (line.cooldownUntilTick > currentTick) {
+        active = false;
+      } else if (overheated) {
+        if (line.active) {
+          disabledByOverheat = true;
+        }
+        active = false;
+        cooldownUntilTick = currentTick + cooldownTicks;
+      } else {
+        active = true;
+      }
+
+      const next: LineRow = {
+        ...line,
+        load,
+        temp,
+        overheated,
+        active,
+        cooldownUntilTick,
+      };
+      if (
+        next.length !== line.length ||
+        next.load !== line.load ||
+        next.temp !== line.temp ||
+        next.overheated !== line.overheated ||
+        next.active !== line.active ||
+        next.cooldownUntilTick !== line.cooldownUntilTick
+      ) {
+        ctx.db.line.id.update(next);
+      }
+      nextLines.push(next);
+    }
+
+    lines = nextLines.sort((a, b) => cmpString(a.id, b.id));
+    lastConnected = dijkstra.connected;
+
+    if (!disabledByOverheat) {
+      break;
+    }
+  }
+
+  for (const generator of controlledGenerators) {
+    const isConnected = lastConnected.has(generator.id);
+    const effectiveOutput = isConnected ? generator.output : 0;
+    if (
+      generator.isConnected !== isConnected ||
+      generator.effectiveOutput !== effectiveOutput ||
+      generator.lastNetworkSolveTick !== currentTick
+    ) {
+      ctx.db.generator.id.update({
+        ...generator,
+        isConnected,
+        effectiveOutput,
+        lastNetworkSolveTick: currentTick,
+      });
+    }
+  }
+
+  const staleLines = lines.filter((line) => {
+    const a = generatorById.get(line.aGeneratorId);
+    const b = generatorById.get(line.bGeneratorId);
+    return !a || !b;
+  });
+  for (const line of staleLines) {
+    ctx.db.line.id.delete(line.id);
+  }
+
+  ctx.db.player.playerId.update({
+    ...player,
+    networkDirty: false,
+  });
+}
+
+function maybeSolveNetworks(
+  ctx: any,
+  config: WorldConfigRow,
+  currentTick: bigint,
+): void {
+  const players = (Array.from(ctx.db.player.iter()) as PlayerRow[]).sort(
+    (a, b) => cmpString(a.playerId, b.playerId),
+  );
+  const isSafetyTick = currentTick % NETWORK_SOLVE_SAFETY_TICKS === 0n;
+  for (const player of players) {
+    if (!player.networkDirty && !isSafetyTick) {
+      continue;
+    }
+    solvePlayerNetwork(ctx, config, currentTick, player.playerId);
+  }
+}
+
 function processTick(ctx: any): void {
   const world = ensureWorldState(ctx);
   const config = ensureWorldConfig(ctx);
@@ -857,6 +1226,8 @@ function processTick(ctx: any): void {
     }
     ctx.db.pendingAction.id.delete(action.id);
   }
+
+  maybeSolveNetworks(ctx, config, currentTick);
 
   const nextTick = currentTick + 1n;
   const sessions = Array.from(
@@ -1110,6 +1481,10 @@ export const startMoveRoot = spacetimedb.reducer(
     }
 
     setGeneratorControl(ctx, toGenerator, "", "isolated");
+    ctx.db.player.playerId.update({
+      ...player,
+      networkDirty: true,
+    });
     ctx.db.rootRelocation.insert({
       playerId,
       fromGeneratorId: player.rootGeneratorId,
@@ -1152,13 +1527,17 @@ export const buildLine = spacetimedb.reducer(
     }
 
     const [aMin, bMax] = a.id <= b.id ? [a.id, b.id] : [b.id, a.id];
+    const length = manhattanDistance({ x: a.x, y: a.y }, { x: b.x, y: b.y });
     ctx.db.line.insert({
       id: lineId,
       ownerPlayerId: playerId,
       aGeneratorId: aMin,
       bGeneratorId: bMax,
+      length,
       capacity: DEFAULT_LINE_CAPACITY,
+      load: 0,
       temp: 0,
+      overheated: false,
       active: true,
       cooldownUntilTick: 0n,
       createdAtTick: world.currentTick,

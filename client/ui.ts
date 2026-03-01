@@ -25,6 +25,10 @@ export interface GeneratorCell {
   expireTick: bigint;
   ownerPlayerId: string;
   state: string;
+  isConnected: boolean;
+  output: number;
+  effectiveOutput: number;
+  lastNetworkSolveTick: bigint;
 }
 
 export interface LineCell {
@@ -32,9 +36,13 @@ export interface LineCell {
   ownerPlayerId: string;
   aGeneratorId: string;
   bGeneratorId: string;
+  length: number;
   capacity: number;
+  load: number;
   temp: number;
+  overheated: boolean;
   active: boolean;
+  cooldownUntilTick: bigint;
 }
 
 export interface PlayerCell {
@@ -151,7 +159,8 @@ export function renderGeneratorsList(
     .map((generator) => {
       const expiresIn = generator.expireTick > now ? generator.expireTick - now : 0n;
       const owner = generator.ownerPlayerId || "none";
-      return `${generator.id} @(${generator.x},${generator.y}) state=${generator.state} owner=${owner} expiresInTicks=${expiresIn.toString()}`;
+      const connectivity = generator.isConnected ? "connected" : "isolated";
+      return `${generator.id} @(${generator.x},${generator.y}) state=${generator.state}/${connectivity} owner=${owner} out=${generator.effectiveOutput}/${generator.output} expiresInTicks=${expiresIn.toString()}`;
     });
 
   return ["generators:", ...rows].join("\n");
@@ -188,7 +197,11 @@ export function renderPlayersList(players: PlayerCell[]): string {
   return ["players:", ...rows].join("\n");
 }
 
-export function renderLinesList(lines: LineCell[], ownerPlayerId: string | null): string {
+export function renderLinesList(
+  lines: LineCell[],
+  ownerPlayerId: string | null,
+  currentTick: number
+): string {
   const ownLines = ownerPlayerId
     ? lines.filter((line) => line.ownerPlayerId === ownerPlayerId)
     : [];
@@ -199,10 +212,12 @@ export function renderLinesList(lines: LineCell[], ownerPlayerId: string | null)
   const rows = ownLines
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
-    .map(
-      (line) =>
-        `${line.id} ${line.aGeneratorId}<->${line.bGeneratorId} cap=${line.capacity} temp=${line.temp} active=${line.active}`,
-    );
+    .map((line) => {
+      const now = BigInt(currentTick);
+      const cooldownRemaining =
+        line.cooldownUntilTick > now ? line.cooldownUntilTick - now : 0n;
+      return `${line.id} ${line.aGeneratorId}<->${line.bGeneratorId} len=${line.length} load=${line.load} cap=${line.capacity} temp=${line.temp} overheated=${line.overheated} active=${line.active} cooldownRemaining=${cooldownRemaining.toString()}`;
+    });
 
   return ["lines:", ...rows].join("\n");
 }

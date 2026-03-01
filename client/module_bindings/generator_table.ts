@@ -18,4 +18,8 @@ export default __t.row({
   expireTick: __t.u64().name("expire_tick"),
   ownerPlayerId: __t.string().name("owner_player_id"),
   state: __t.string(),
+  isConnected: __t.bool().name("is_connected"),
+  output: __t.i32(),
+  effectiveOutput: __t.i32().name("effective_output"),
+  lastNetworkSolveTick: __t.u64().name("last_network_solve_tick"),
 });

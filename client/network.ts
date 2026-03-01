@@ -40,6 +40,10 @@ export interface GeneratorSnapshot {
   expireTick: bigint;
   ownerPlayerId: string;
   state: string;
+  isConnected: boolean;
+  output: number;
+  effectiveOutput: number;
+  lastNetworkSolveTick: bigint;
 }
 
 export interface LineSnapshot {
@@ -47,8 +51,11 @@ export interface LineSnapshot {
   ownerPlayerId: string;
   aGeneratorId: string;
   bGeneratorId: string;
+  length: number;
   capacity: number;
+  load: number;
   temp: number;
+  overheated: boolean;
   active: boolean;
   cooldownUntilTick: bigint;
   createdAtTick: bigint;
@@ -307,7 +314,15 @@ export class SpacetimeClient {
       expireTick: readField<bigint>(row, "expireTick", "expire_tick") ?? 0n,
       ownerPlayerId:
         readField<string>(row, "ownerPlayerId", "owner_player_id") ?? "",
-      state: readField<string>(row, "state") ?? "neutral"
+      state: readField<string>(row, "state") ?? "neutral",
+      isConnected:
+        readField<boolean>(row, "isConnected", "is_connected") ?? false,
+      output: readField<number>(row, "output") ?? 0,
+      effectiveOutput:
+        readField<number>(row, "effectiveOutput", "effective_output") ?? 0,
+      lastNetworkSolveTick:
+        readField<bigint>(row, "lastNetworkSolveTick", "last_network_solve_tick") ??
+        0n
     }));
 
     generators.sort((a, b) => {
@@ -330,8 +345,11 @@ export class SpacetimeClient {
         readField<string>(row, "aGeneratorId", "a_generator_id") ?? "",
       bGeneratorId:
         readField<string>(row, "bGeneratorId", "b_generator_id") ?? "",
+      length: readField<number>(row, "length") ?? 0,
       capacity: readField<number>(row, "capacity") ?? 0,
+      load: readField<number>(row, "load") ?? 0,
       temp: readField<number>(row, "temp") ?? 0,
+      overheated: readField<boolean>(row, "overheated") ?? false,
       active: readField<boolean>(row, "active") ?? false,
       cooldownUntilTick:
         readField<bigint>(row, "cooldownUntilTick", "cooldown_until_tick") ?? 0n,

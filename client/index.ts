@@ -204,7 +204,7 @@ function renderLineControls(ownId: string | null): void {
       (line) => `
         <div class="action-row">
           <code>${line.id}</code>
-          <span>${line.aGeneratorId}<->${line.bGeneratorId} cap=${line.capacity} temp=${line.temp} active=${line.active}</span>
+          <span>${line.aGeneratorId}<->${line.bGeneratorId} len=${line.length} load=${line.load} cap=${line.capacity} temp=${line.temp} active=${line.active}</span>
           <button data-action="destroy-line" data-line-id="${line.id}">Destroy Line</button>
         </div>
       `
@@ -232,7 +232,7 @@ function render(): void {
   setText("tick", `tick: ${currentTick}`);
   setText("players-list", renderPlayersList(players));
   setText("generators-list", renderGeneratorsList(client.getGenerators(), currentTick));
-  setText("lines-list", renderLinesList(client.getLines(), ownId));
+  setText("lines-list", renderLinesList(client.getLines(), ownId, currentTick));
   setText("markers-list", renderSpawnMarkersList(client.getSpawnMarkers()));
 
   if (me) {

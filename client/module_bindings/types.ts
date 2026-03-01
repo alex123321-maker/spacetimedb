@@ -18,6 +18,10 @@ export const Generator = __t.object("Generator", {
   expireTick: __t.u64(),
   ownerPlayerId: __t.string(),
   state: __t.string(),
+  isConnected: __t.bool(),
+  output: __t.i32(),
+  effectiveOutput: __t.i32(),
+  lastNetworkSolveTick: __t.u64(),
 });
 export type Generator = __Infer<typeof Generator>;
 
@@ -26,8 +30,11 @@ export const Line = __t.object("Line", {
   ownerPlayerId: __t.string(),
   aGeneratorId: __t.string(),
   bGeneratorId: __t.string(),
+  length: __t.i32(),
   capacity: __t.i32(),
+  load: __t.i32(),
   temp: __t.i32(),
+  overheated: __t.bool(),
   active: __t.bool(),
   cooldownUntilTick: __t.u64(),
   createdAtTick: __t.u64(),
