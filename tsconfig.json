@@ -8,6 +8,8 @@
     "skipLibCheck": true
   },
   "include": [
+    "client/**/*.ts",
+    "server/**/*.ts",
     "shared/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts"

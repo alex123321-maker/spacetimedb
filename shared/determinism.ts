@@ -8,12 +8,19 @@ export function cmpU32(a: number, b: number): number {
   return 0;
 }
 
-export function cmpId(a: number, b: number): number {
-  if (!Number.isInteger(a) || !Number.isInteger(b)) {
-    throw new Error("cmpId expects integer ids");
+export function cmpId(a: string | number, b: string | number): number {
+  if (typeof a === "number" && typeof b === "number") {
+    if (!Number.isInteger(a) || !Number.isInteger(b)) {
+      throw new Error("cmpId expects integer numeric ids");
+    }
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
   }
-  if (a < b) return -1;
-  if (a > b) return 1;
+  const as = String(a);
+  const bs = String(b);
+  if (as < bs) return -1;
+  if (as > bs) return 1;
   return 0;
 }
 
@@ -40,10 +47,12 @@ export function stableSort<T>(arr: T[], cmp: Comparator<T>): T[] {
 
 export interface OrderedAction {
   tick: number;
-  playerId: number;
+  playerId: string | number;
   seq: number;
 }
 
-export function orderKey(action: OrderedAction): [number, number, number] {
+export function orderKey(
+  action: OrderedAction
+): [number, string | number, number] {
   return [action.tick, action.playerId, action.seq];
 }
