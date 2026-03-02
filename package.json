@@ -10,11 +10,14 @@
     "client:dev": "vite --host 127.0.0.1 --port 5173",
     "client:build": "vite build",
     "client:preview": "vite preview --host 127.0.0.1 --port 4173",
+    "build:client": "vite build",
+    "preview:client": "vite preview --host 127.0.0.1 --port 4173",
     "spacetime:start:local": "D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe start --listen-addr 127.0.0.1:3000 --data-dir D:\\ProgramFiles\\SpacetimeDB\\data --non-interactive",
-    "spacetime:dev": "set NO_PROXY=127.0.0.1,localhost&& D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe dev continuum-grid --project-path . --module-bindings-path client/module_bindings --client-lang typescript --yes --server-only",
+    "spacetime:dev": "set NO_PROXY=127.0.0.1,localhost&& D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe dev continum-grids-3vxm5 --project-path . --module-bindings-path client/module_bindings --client-lang typescript --yes --server-only",
     "spacetime:build": "D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe build --module-path spacetimedb",
     "spacetime:publish:local": "set NO_PROXY=127.0.0.1,localhost&& D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe publish --module-path spacetimedb --server local --yes",
-    "spacetime:generate": "set NO_PROXY=127.0.0.1,localhost&& D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe generate continuum-grid --lang typescript --out-dir client/module_bindings --module-path spacetimedb --yes"
+    "spacetime:publish:main": "D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe publish continum-grids-3vxm5 --server maincloud",
+    "spacetime:generate": "set NO_PROXY=127.0.0.1,localhost&& D:\\ProgramFiles\\SpacetimeDB\\spacetime.exe generate continum-grids-3vxm5 --lang typescript --out-dir client/module_bindings --module-path spacetimedb --yes"
   },
   "dependencies": {
     "pixi.js": "^8.16.0",

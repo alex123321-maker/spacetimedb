@@ -1,5 +1,6 @@
 import { type Identity } from "spacetimedb";
 import { DbConnection, tables } from "../module_bindings";
+import localSpacetimeConfig from "../../spacetime.local.json";
 import type {
   CaptureAttempt,
   EventLog,
@@ -16,12 +17,21 @@ import type {
 } from "../module_bindings/types";
 import { CLIENT_SUBSCRIPTIONS } from "./Subscriptions";
 
+const FALLBACK_HOST = "http://127.0.0.1:3000";
+const FALLBACK_DB_NAME =
+  typeof localSpacetimeConfig.database === "string" &&
+  localSpacetimeConfig.database.length > 0
+    ? localSpacetimeConfig.database
+    : "continum-grids-3vxm5";
+
 const HOST =
+  import.meta.env.VITE_SPACETIME_HOST ??
   (globalThis as { __STDB_HOST__?: string }).__STDB_HOST__ ??
-  "ws://127.0.0.1:3000";
+  FALLBACK_HOST;
 const DB_NAME =
+  import.meta.env.VITE_SPACETIME_DB ??
   (globalThis as { __STDB_DB_NAME__?: string }).__STDB_DB_NAME__ ??
-  "continuum-grid";
+  FALLBACK_DB_NAME;
 
 const FIXED_SCALE = 1000;
 
