@@ -38,6 +38,19 @@ export class Hud {
   private readonly networkEl: HTMLElement;
   private readonly errorEl: HTMLElement;
   private readonly hoverTooltipEl: HTMLElement;
+  private readonly btnPlaceRoot: HTMLButtonElement;
+  private readonly btnMoveRoot: HTMLButtonElement;
+  private readonly btnCapture: HTMLButtonElement;
+  private readonly btnCancelCapture: HTMLButtonElement;
+  private readonly btnToggleBuild: HTMLButtonElement;
+  private readonly btnToggleDestroy: HTMLButtonElement;
+  private readonly btnSetA: HTMLButtonElement;
+  private readonly btnSetB: HTMLButtonElement;
+  private readonly btnCancelMode: HTMLButtonElement;
+  private readonly actionsABEl: HTMLElement;
+  private readonly actionsHintEl: HTMLElement;
+  private readonly actionsCaptureEl: HTMLElement;
+  private readonly actionsRelocationEl: HTMLElement;
 
   private lastSnapshot: WorldSnapshot | null = null;
   private hoverPayload: HoverGeneratorPayload | null = null;
@@ -72,7 +85,95 @@ export class Hud {
     this.hoverTooltipEl.style.display = "none";
     document.body.appendChild(this.hoverTooltipEl);
 
-    this.root.addEventListener("click", this.onClick);
+    const makeButton = (label: string): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.textContent = label;
+      return button;
+    };
+    const makeRow = (): HTMLDivElement => {
+      const row = document.createElement("div");
+      row.className = "hud-row";
+      return row;
+    };
+    const makeMeta = (): HTMLDivElement => {
+      const meta = document.createElement("div");
+      meta.className = "hud-meta";
+      return meta;
+    };
+
+    this.actionsEl.innerHTML = "";
+    const title = document.createElement("div");
+    title.innerHTML = "<strong>Actions</strong>";
+    this.actionsEl.appendChild(title);
+
+    const row1 = makeRow();
+    this.btnPlaceRoot = makeButton("Place Root");
+    this.btnMoveRoot = makeButton("Move Root");
+    this.btnCapture = makeButton("Capture");
+    this.btnCancelCapture = makeButton("Cancel Capture");
+    row1.append(
+      this.btnPlaceRoot,
+      this.btnMoveRoot,
+      this.btnCapture,
+      this.btnCancelCapture,
+    );
+    this.actionsEl.appendChild(row1);
+
+    const row2 = makeRow();
+    this.btnToggleBuild = makeButton("Build Line");
+    this.btnToggleDestroy = makeButton("Destroy Line");
+    row2.append(this.btnToggleBuild, this.btnToggleDestroy);
+    this.actionsEl.appendChild(row2);
+
+    const row3 = makeRow();
+    this.btnSetA = makeButton("Set as A");
+    this.btnSetB = makeButton("Set as B");
+    row3.append(this.btnSetA, this.btnSetB);
+    this.actionsEl.appendChild(row3);
+
+    const row4 = makeRow();
+    this.btnCancelMode = makeButton("Cancel (Esc)");
+    row4.append(this.btnCancelMode);
+    this.actionsEl.appendChild(row4);
+
+    this.actionsABEl = makeMeta();
+    this.actionsHintEl = makeMeta();
+    this.actionsCaptureEl = makeMeta();
+    this.actionsRelocationEl = makeMeta();
+    this.actionsEl.append(
+      this.actionsABEl,
+      this.actionsHintEl,
+      this.actionsCaptureEl,
+      this.actionsRelocationEl,
+    );
+
+    this.btnPlaceRoot.addEventListener("click", () => {
+      void this.handleAction("place-root");
+    });
+    this.btnMoveRoot.addEventListener("click", () => {
+      void this.handleAction("move-root");
+    });
+    this.btnCapture.addEventListener("click", () => {
+      void this.handleAction("capture");
+    });
+    this.btnCancelCapture.addEventListener("click", () => {
+      void this.handleAction("cancel-capture");
+    });
+    this.btnToggleBuild.addEventListener("click", () => {
+      void this.handleAction("toggle-build-line");
+    });
+    this.btnToggleDestroy.addEventListener("click", () => {
+      void this.handleAction("toggle-destroy-line");
+    });
+    this.btnSetA.addEventListener("click", () => {
+      void this.handleAction("set-a");
+    });
+    this.btnSetB.addEventListener("click", () => {
+      void this.handleAction("set-b");
+    });
+    this.btnCancelMode.addEventListener("click", () => {
+      void this.handleAction("cancel-mode");
+    });
   }
 
   render(snapshot: WorldSnapshot): void {
@@ -223,34 +324,38 @@ export class Hud {
       hint = "Root relocation in progress";
     }
 
-    this.actionsEl.innerHTML = `
-      <div><strong>Actions</strong></div>
-      <div class="hud-row">
-        <button data-action="place-root" ${placeRootEnabled ? "" : "disabled"}>Place Root</button>
-        <button data-action="move-root" ${moveRootEnabled ? "" : "disabled"}>Move Root</button>
-        <button data-action="capture" ${canCapture ? "" : "disabled"}>Capture</button>
-        <button data-action="cancel-capture" ${canCancelCapture ? "" : "disabled"}>Cancel Capture</button>
-      </div>
-      <div class="hud-row">
-        <button data-action="toggle-build-line">${buildMode ? "Build: ON" : "Build Line"}</button>
-        <button data-action="toggle-destroy-line">${destroyMode ? "Destroy: ON" : "Destroy Line"}</button>
-      </div>
-      <div class="hud-row">
-        <button data-action="set-a" ${canSetLinePoint ? "" : "disabled"}>Set as A</button>
-        <button data-action="set-b" ${canSetLinePoint ? "" : "disabled"}>Set as B</button>
-      </div>
-      <div class="hud-row">
-        <button data-action="cancel-mode" ${this.selection.mode.kind !== "default" ? "" : "disabled"}>Cancel (Esc)</button>
-      </div>
-      <div class="hud-meta">A=${this.selection.lineA ?? "-"}, B=${this.selection.lineB ?? "-"}</div>
-      <div class="hud-meta">${hint}</div>
-      ${
-        activeCapture
-          ? `<div class="hud-meta">capture: ${activeCapture.playerId} -> ${activeCapture.finishTick} (remaining ${remainingTicks} ticks)</div>`
-          : ""
-      }
-      ${rootRelocation ? `<div class="hud-meta">relocation: ${rootRelocation.fromGeneratorId} -> ${rootRelocation.toGeneratorId}</div>` : ""}
-    `;
+    this.btnPlaceRoot.disabled = !placeRootEnabled;
+    this.btnMoveRoot.disabled = !moveRootEnabled;
+    this.btnCapture.disabled = !canCapture;
+    this.btnCancelCapture.disabled = !canCancelCapture;
+    this.btnToggleBuild.textContent = buildMode ? "Build: ON" : "Build Line";
+    this.btnToggleDestroy.textContent = destroyMode
+      ? "Destroy: ON"
+      : "Destroy Line";
+    this.btnSetA.disabled = !canSetLinePoint;
+    this.btnSetB.disabled = !canSetLinePoint;
+    this.btnCancelMode.disabled = this.selection.mode.kind === "default";
+
+    this.actionsABEl.textContent = `A=${this.selection.lineA ?? "-"}, B=${this.selection.lineB ?? "-"}`;
+    this.actionsHintEl.textContent = hint;
+
+    if (activeCapture) {
+      this.actionsCaptureEl.style.display = "";
+      this.actionsCaptureEl.textContent =
+        `capture: ${activeCapture.playerId} -> ${activeCapture.finishTick} (remaining ${remainingTicks} ticks)`;
+    } else {
+      this.actionsCaptureEl.style.display = "none";
+      this.actionsCaptureEl.textContent = "";
+    }
+
+    if (rootRelocation) {
+      this.actionsRelocationEl.style.display = "";
+      this.actionsRelocationEl.textContent =
+        `relocation: ${rootRelocation.fromGeneratorId} -> ${rootRelocation.toGeneratorId}`;
+    } else {
+      this.actionsRelocationEl.style.display = "none";
+      this.actionsRelocationEl.textContent = "";
+    }
   }
 
   private renderNetwork(snapshot: WorldSnapshot): void {
@@ -312,13 +417,7 @@ export class Hud {
     this.hoverTooltipEl.style.top = `${Math.round(hover.screenY + 14)}px`;
   }
 
-  private onClick = async (event: MouseEvent): Promise<void> => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-
-    const action = target.dataset.action;
-    if (!action) return;
-
+  private handleAction = async (action: string): Promise<void> => {
     this.errorEl.textContent = "";
 
     try {
