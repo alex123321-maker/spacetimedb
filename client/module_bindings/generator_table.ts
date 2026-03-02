@@ -18,6 +18,7 @@ export default __t.row({
   expireTick: __t.u64().name("expire_tick"),
   ownerPlayerId: __t.string().name("owner_player_id"),
   state: __t.string(),
+  reservedByPlayerId: __t.string().name("reserved_by_player_id"),
   isConnected: __t.bool().name("is_connected"),
   output: __t.i32(),
   effectiveOutput: __t.i32().name("effective_output"),

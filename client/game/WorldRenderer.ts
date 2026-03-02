@@ -21,6 +21,7 @@ export class WorldRenderer {
   private readonly junkTextureKeys = new Map<string, string>();
   private readonly generatorSprites = new Map<string, Sprite>();
   private readonly generatorGlowSprites = new Map<string, Sprite>();
+  private readonly generatorReservedSprites = new Map<string, Sprite>();
   private readonly generatorTextureKeys = new Map<string, string>();
   private readonly playerSprites = new Map<string, Sprite>();
 
@@ -208,6 +209,27 @@ export class WorldRenderer {
         glow.destroy();
       }
 
+      let reserved = this.generatorReservedSprites.get(generator.id);
+      if (generator.reservedByPlayerId !== "") {
+        if (!reserved) {
+          reserved = new Sprite(getTexture("selection"));
+          reserved.anchor.set(0.5);
+          reserved.tint = 0xffd966;
+          reserved.alpha = 0.5;
+          this.generatorReservedSprites.set(generator.id, reserved);
+          this.layers.generatorLayer.addChild(reserved);
+        }
+        this.fitSpriteToTile(reserved, tileSize, 1.25);
+        reserved.position.set(
+          (generator.x + 0.5) * tileSize,
+          (generator.y + 0.5) * tileSize,
+        );
+      } else if (reserved) {
+        this.layers.generatorLayer.removeChild(reserved);
+        this.generatorReservedSprites.delete(generator.id);
+        reserved.destroy();
+      }
+
       this.fitSpriteToTile(sprite, tileSize);
       sprite.position.set(
         (generator.x + 0.5) * tileSize,
@@ -227,6 +249,13 @@ export class WorldRenderer {
         this.layers.generatorLayer.removeChild(glow);
         this.generatorGlowSprites.delete(generatorId);
         glow.destroy();
+      }
+
+      const reserved = this.generatorReservedSprites.get(generatorId);
+      if (reserved) {
+        this.layers.generatorLayer.removeChild(reserved);
+        this.generatorReservedSprites.delete(generatorId);
+        reserved.destroy();
       }
     }
   }
@@ -269,7 +298,6 @@ export class WorldRenderer {
   private getGeneratorTextureKey(generator: Generator): string {
     if (generator.isConnected) return "gen_connected";
     if (generator.state === "controlled") return "gen_controlled";
-    if (generator.state === "isolated") return "gen_isolated";
     return "gen_neutral";
   }
 

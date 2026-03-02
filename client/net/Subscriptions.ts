@@ -10,5 +10,6 @@ export const CLIENT_SUBSCRIPTIONS = [
   tables.line,
   tables.rootNode,
   tables.rootRelocation,
+  tables.captureAttempt,
   tables.eventLog,
 ] as const;

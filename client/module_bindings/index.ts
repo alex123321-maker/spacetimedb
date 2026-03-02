@@ -37,12 +37,14 @@ import {
 import AdminClaimGeneratorReducer from "./admin_claim_generator_reducer";
 import ApplyMoveReducer from "./apply_move_reducer";
 import BuildLineReducer from "./build_line_reducer";
+import CancelCaptureReducer from "./cancel_capture_reducer";
 import DestroyLineReducer from "./destroy_line_reducer";
 import EnqueueActionReducer from "./enqueue_action_reducer";
 import JoinPlayerReducer from "./join_player_reducer";
 import PlaceRootReducer from "./place_root_reducer";
 import SetMoveTargetReducer from "./set_move_target_reducer";
 import SetTestAdminModeReducer from "./set_test_admin_mode_reducer";
+import StartCaptureGeneratorReducer from "./start_capture_generator_reducer";
 import StartMoveRootReducer from "./start_move_root_reducer";
 import StopMoveReducer from "./stop_move_reducer";
 import UpdateWorldConfigReducer from "./update_world_config_reducer";
@@ -51,6 +53,7 @@ import UpdateWorldViewConfigReducer from "./update_world_view_config_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import CaptureAttemptRow from "./capture_attempt_table";
 import EventLogRow from "./event_log_table";
 import GeneratorRow from "./generator_table";
 import JunkRow from "./junk_table";
@@ -68,6 +71,17 @@ import WorldStateRow from "./world_state_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  captureAttempt: __table({
+    name: 'capture_attempt',
+    indexes: [
+      { name: 'generatorId', algorithm: 'btree', columns: [
+        'generatorId',
+      ] },
+    ],
+    constraints: [
+      { name: 'capture_attempt_generator_id_key', constraint: 'unique', columns: ['generatorId'] },
+    ],
+  }, CaptureAttemptRow),
   eventLog: __table({
     name: 'event_log',
     indexes: [
@@ -207,12 +221,14 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_claim_generator", AdminClaimGeneratorReducer),
   __reducerSchema("apply_move", ApplyMoveReducer),
   __reducerSchema("build_line", BuildLineReducer),
+  __reducerSchema("cancel_capture", CancelCaptureReducer),
   __reducerSchema("destroy_line", DestroyLineReducer),
   __reducerSchema("enqueue_action", EnqueueActionReducer),
   __reducerSchema("join_player", JoinPlayerReducer),
   __reducerSchema("place_root", PlaceRootReducer),
   __reducerSchema("set_move_target", SetMoveTargetReducer),
   __reducerSchema("set_test_admin_mode", SetTestAdminModeReducer),
+  __reducerSchema("start_capture_generator", StartCaptureGeneratorReducer),
   __reducerSchema("start_move_root", StartMoveRootReducer),
   __reducerSchema("stop_move", StopMoveReducer),
   __reducerSchema("update_world_config", UpdateWorldConfigReducer),

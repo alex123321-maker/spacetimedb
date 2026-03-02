@@ -14,10 +14,10 @@ function junkColor(kind: number): string {
   return "#3498db";
 }
 
-function generatorColor(state: string, connected: boolean): string {
+function generatorColor(state: string, connected: boolean, reservedByPlayerId: string): string {
+  if (state === "neutral" && reservedByPlayerId !== "") return "#f4d35e";
   if (state === "controlled" && connected) return "#00b4d8";
   if (state === "controlled") return "#27ae60";
-  if (state === "isolated") return "#e67e22";
   return "#95a5a6";
 }
 
@@ -149,7 +149,11 @@ export class MapOverlay {
     }
 
     for (const generator of snapshot.generators) {
-      this.ctx.fillStyle = generatorColor(generator.state, generator.isConnected);
+      this.ctx.fillStyle = generatorColor(
+        generator.state,
+        generator.isConnected,
+        generator.reservedByPlayerId,
+      );
       this.ctx.beginPath();
       this.ctx.arc(
         mapX + (generator.x + 0.5) * scale,

@@ -1,6 +1,7 @@
 import { type Identity } from "spacetimedb";
 import { DbConnection, tables } from "../module_bindings";
 import type {
+  CaptureAttempt,
   EventLog,
   Generator,
   Junk,
@@ -37,6 +38,7 @@ type VersionKey =
   | "line"
   | "rootNode"
   | "rootRelocation"
+  | "captureAttempt"
   | "eventLog";
 
 export interface SnapshotVersions {
@@ -49,6 +51,7 @@ export interface SnapshotVersions {
   line: number;
   rootNode: number;
   rootRelocation: number;
+  captureAttempt: number;
   eventLog: number;
 }
 
@@ -63,6 +66,7 @@ export interface WorldSnapshot {
   lines: Line[];
   rootNodes: RootNode[];
   rootRelocations: RootRelocation[];
+  captureAttempts: CaptureAttempt[];
   eventLog: EventLog[];
   versions: SnapshotVersions;
 }
@@ -77,6 +81,7 @@ interface WorldStore {
   lines: Map<string, Line>;
   rootNodes: Map<string, RootNode>;
   rootRelocations: Map<string, RootRelocation>;
+  captureAttempts: Map<string, CaptureAttempt>;
   eventLog: Map<string, EventLog>;
 }
 
@@ -111,6 +116,7 @@ export class NetClient {
     line: 0,
     rootNode: 0,
     rootRelocation: 0,
+    captureAttempt: 0,
     eventLog: 0,
   };
 
@@ -124,6 +130,7 @@ export class NetClient {
     lines: new Map<string, Line>(),
     rootNodes: new Map<string, RootNode>(),
     rootRelocations: new Map<string, RootRelocation>(),
+    captureAttempts: new Map<string, CaptureAttempt>(),
     eventLog: new Map<string, EventLog>(),
   };
 
@@ -209,6 +216,9 @@ export class NetClient {
       lines: sortByStringId(this.store.lines.values()),
       rootNodes: sortByPlayerId(this.store.rootNodes.values()),
       rootRelocations: sortByPlayerId(this.store.rootRelocations.values()),
+      captureAttempts: Array.from(this.store.captureAttempts.values()).sort((a, b) =>
+        a.generatorId.localeCompare(b.generatorId),
+      ),
       eventLog: sortByStringId(this.store.eventLog.values()),
       versions: { ...this.versions },
     };
@@ -244,28 +254,42 @@ export class NetClient {
     return this.callReducer(["destroyLine", "destroy_line"], { lineId });
   }
 
+  startCaptureGenerator(generatorId: string): Promise<void> {
+    return this.callReducer(
+      ["startCaptureGenerator", "start_capture_generator"],
+      { generatorId },
+    );
+  }
+
+  cancelCapture(generatorId: string): Promise<void> {
+    return this.callReducer(["cancelCapture", "cancel_capture"], {
+      generatorId,
+    });
+  }
+
   private attachTableListeners(conn: DbConnection): void {
     const db = conn.db as any;
 
-    const attachMapTable = <T extends { id: string }>(
+    const attachMapTable = <T>(
       tableName: string,
       tableVersion: VersionKey,
       map: Map<string, T>,
+      keySelector: (row: T) => string,
     ): void => {
       const table = db[tableName];
       table.onInsert((_ctx: unknown, row: T) => {
-        map.set(row.id, row);
+        map.set(keySelector(row), row);
         this.bumpVersion(tableVersion);
       });
       if (typeof table.onUpdate === "function") {
         table.onUpdate((_ctx: unknown, _oldRow: T, newRow: T) => {
-          map.set(newRow.id, newRow);
+          map.set(keySelector(newRow), newRow);
           this.bumpVersion(tableVersion);
         });
       }
       if (typeof table.onDelete === "function") {
         table.onDelete((_ctx: unknown, row: T) => {
-          map.delete(row.id);
+          map.delete(keySelector(row));
           this.bumpVersion(tableVersion);
         });
       }
@@ -314,17 +338,33 @@ export class NetClient {
     });
 
     attachPlayerKeyTable<Player>("player", "player", this.store.players);
-    attachMapTable<Obstacle>("obstacle", "obstacle", this.store.obstacles);
-    attachMapTable<Junk>("junk", "junk", this.store.junk);
-    attachMapTable<Generator>("generator", "generator", this.store.generators);
-    attachMapTable<Line>("line", "line", this.store.lines);
+    attachMapTable<Obstacle>(
+      "obstacle",
+      "obstacle",
+      this.store.obstacles,
+      (row) => row.id,
+    );
+    attachMapTable<Junk>("junk", "junk", this.store.junk, (row) => row.id);
+    attachMapTable<Generator>(
+      "generator",
+      "generator",
+      this.store.generators,
+      (row) => row.id,
+    );
+    attachMapTable<Line>("line", "line", this.store.lines, (row) => row.id);
     attachPlayerKeyTable<RootNode>("rootNode", "rootNode", this.store.rootNodes);
     attachPlayerKeyTable<RootRelocation>(
       "rootRelocation",
       "rootRelocation",
       this.store.rootRelocations,
     );
-    attachMapTable<EventLog>("eventLog", "eventLog", this.store.eventLog);
+    attachMapTable<CaptureAttempt>(
+      "captureAttempt",
+      "captureAttempt",
+      this.store.captureAttempts,
+      (row) => row.generatorId,
+    );
+    attachMapTable<EventLog>("eventLog", "eventLog", this.store.eventLog, (row) => row.id);
   }
 
   private hydrateFromDb(conn: DbConnection): void {
@@ -344,6 +384,12 @@ export class NetClient {
       Array.from(conn.db.rootRelocation.iter()) as RootRelocation[],
       (x) => x.playerId,
       "rootRelocation",
+    );
+    this.replaceMap(
+      this.store.captureAttempts,
+      Array.from(conn.db.captureAttempt.iter()) as CaptureAttempt[],
+      (x) => x.generatorId,
+      "captureAttempt",
     );
     this.replaceMap(this.store.eventLog, Array.from(conn.db.eventLog.iter()) as EventLog[], (x) => x.id, "eventLog");
 

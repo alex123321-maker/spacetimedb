@@ -18,7 +18,6 @@ export const COLORS = {
   playerOtherStroke: 0xfff4cc,
   generatorNeutral: 0x95a5a6,
   generatorControlled: 0x27ae60,
-  generatorIsolated: 0xe67e22,
   generatorConnected: 0x00b4d8,
   selection: 0xffffff,
 } as const;
@@ -32,14 +31,14 @@ export function getJunkColor(kind: number): number {
 }
 
 export function getGeneratorColor(generator: Generator): number {
+  if (generator.state === "neutral" && generator.reservedByPlayerId !== "") {
+    return 0xf4d35e;
+  }
   if (generator.state === "controlled" && generator.isConnected) {
     return COLORS.generatorConnected;
   }
   if (generator.state === "controlled") {
     return COLORS.generatorControlled;
-  }
-  if (generator.state === "isolated") {
-    return COLORS.generatorIsolated;
   }
   return COLORS.generatorNeutral;
 }

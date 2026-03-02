@@ -22,5 +22,6 @@ export default __t.row({
   worldHeight: __t.u32().name("world_height"),
   tileSizePx: __t.u16().name("tile_size_px"),
   interactRangeCells: __t.u32().name("interact_range_cells"),
+  captureDurationTicks: __t.u64().name("capture_duration_ticks"),
   enableTestAdmin: __t.bool().name("enable_test_admin"),
 });

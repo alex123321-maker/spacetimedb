@@ -116,6 +116,7 @@ export class Hud {
       <div>id: ${selected.id}</div>
       <div>state: ${selected.state}</div>
       <div>owner: ${selected.ownerPlayerId || "none"}</div>
+      <div>reserved: ${selected.reservedByPlayerId || "none"}</div>
       <div>connected: ${selected.isConnected}</div>
       <div>dist: ${Number.isFinite(dist) ? dist.toFixed(2) : "n/a"}</div>
     `
@@ -149,30 +150,73 @@ export class Hud {
     const isNeutralTarget = Boolean(
       selected && selected.state === "neutral" && selected.ownerPlayerId === "",
     );
+    const isUnreservedTarget = Boolean(selected && selected.reservedByPlayerId === "");
     const cooldownOk =
       myPlayer && BigInt(currentTick) >= myPlayer.rootMoveAvailableAtTick;
+    const activeCapture = selected
+      ? snapshot.captureAttempts.find((attempt) => attempt.generatorId === selected.id) ?? null
+      : null;
+    const canCapture = Boolean(
+      selected &&
+      myPlayer &&
+      hasRoot &&
+      inRange &&
+      !rootRelocation &&
+      isNeutralTarget &&
+      isUnreservedTarget &&
+      !activeCapture,
+    );
+    const canCancelCapture = Boolean(
+      selected &&
+      activeCapture &&
+      snapshot.myPlayerId &&
+      activeCapture.playerId === snapshot.myPlayerId,
+    );
+    const remainingTicks = activeCapture
+      ? Number(
+          activeCapture.finishTick > BigInt(currentTick)
+            ? activeCapture.finishTick - BigInt(currentTick)
+            : 0n,
+        )
+      : 0;
 
     const placeRootEnabled = Boolean(
-      selected && myPlayer && isNeutralTarget && !hasRoot && inRange && !rootRelocation,
+      selected &&
+      myPlayer &&
+      isNeutralTarget &&
+      isUnreservedTarget &&
+      !hasRoot &&
+      inRange &&
+      !rootRelocation,
     );
     const moveRootEnabled = Boolean(
-      selected && myPlayer && isNeutralTarget && hasRoot && inRange && cooldownOk && !rootRelocation,
+      selected &&
+      myPlayer &&
+      isNeutralTarget &&
+      isUnreservedTarget &&
+      hasRoot &&
+      inRange &&
+      cooldownOk &&
+      !rootRelocation,
     );
 
     const buildMode = this.selection.mode.kind === "buildLine";
     const destroyMode = this.selection.mode.kind === "destroyLine";
     const canSetLinePoint = Boolean(selected && buildMode);
+    const mode = this.selection.mode;
 
     let hint = "";
-    if (buildMode) {
+    if (mode.kind === "buildLine") {
       hint =
-        this.selection.mode.step === "pickA"
+        mode.step === "pickA"
           ? "Build mode: click generator A"
-          : `Build mode: click generator B (A=${this.selection.mode.aId ?? "?"})`;
-    } else if (destroyMode) {
+          : `Build mode: click generator B (A=${mode.aId ?? "?"})`;
+    } else if (mode.kind === "destroyLine") {
       hint = "Destroy mode: click a line segment";
     } else if (!selected) {
       hint = "Select a generator to see available actions";
+    } else if (selected.reservedByPlayerId !== "") {
+      hint = `Generator reserved by ${selected.reservedByPlayerId}`;
     } else if (!inRange) {
       hint = "Selected generator is out of interact range";
     } else if (rootRelocation) {
@@ -184,6 +228,8 @@ export class Hud {
       <div class="hud-row">
         <button data-action="place-root" ${placeRootEnabled ? "" : "disabled"}>Place Root</button>
         <button data-action="move-root" ${moveRootEnabled ? "" : "disabled"}>Move Root</button>
+        <button data-action="capture" ${canCapture ? "" : "disabled"}>Capture</button>
+        <button data-action="cancel-capture" ${canCancelCapture ? "" : "disabled"}>Cancel Capture</button>
       </div>
       <div class="hud-row">
         <button data-action="toggle-build-line">${buildMode ? "Build: ON" : "Build Line"}</button>
@@ -198,6 +244,11 @@ export class Hud {
       </div>
       <div class="hud-meta">A=${this.selection.lineA ?? "-"}, B=${this.selection.lineB ?? "-"}</div>
       <div class="hud-meta">${hint}</div>
+      ${
+        activeCapture
+          ? `<div class="hud-meta">capture: ${activeCapture.playerId} -> ${activeCapture.finishTick} (remaining ${remainingTicks} ticks)</div>`
+          : ""
+      }
       ${rootRelocation ? `<div class="hud-meta">relocation: ${rootRelocation.fromGeneratorId} -> ${rootRelocation.toGeneratorId}</div>` : ""}
     `;
   }
@@ -252,6 +303,7 @@ export class Hud {
       <div><strong>${escapeHtml(generator.id)}</strong></div>
       <div>state: ${escapeHtml(generator.state)}</div>
       <div>owner: ${escapeHtml(generator.ownerPlayerId || "none")}</div>
+      <div>reserved: ${escapeHtml(generator.reservedByPlayerId || "none")}</div>
       <div>connected: ${generator.isConnected}</div>
       <div>dist: ${dist === null ? "n/a" : dist.toFixed(2)}</div>
     `;
@@ -281,6 +333,20 @@ export class Hud {
         const generatorId = this.selection.selectedGeneratorId;
         if (!generatorId) return;
         await this.net.startMoveRoot(generatorId);
+        return;
+      }
+
+      if (action === "capture") {
+        const generatorId = this.selection.selectedGeneratorId;
+        if (!generatorId) return;
+        await this.net.startCaptureGenerator(generatorId);
+        return;
+      }
+
+      if (action === "cancel-capture") {
+        const generatorId = this.selection.selectedGeneratorId;
+        if (!generatorId) return;
+        await this.net.cancelCapture(generatorId);
         return;
       }
 

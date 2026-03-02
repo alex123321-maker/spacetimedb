@@ -28,6 +28,7 @@ const DEFAULT_JUNK_COUNT = 200;
 const DEFAULT_JUNK_KIND_COUNT = 4;
 const DEFAULT_LINE_CAPACITY = 150;
 const DEFAULT_GENERATOR_OUTPUT = 100;
+const DEFAULT_CAPTURE_DURATION_MINUTES = 10;
 const LINE_COOLDOWN_MINUTES = 2;
 const LINE_COOL_RATE_PER_TICK = 1;
 const NETWORK_SOLVE_SAFETY_TICKS = 20n;
@@ -59,6 +60,7 @@ interface WorldConfigRow {
   worldHeight: number;
   tileSizePx: number;
   interactRangeCells: number;
+  captureDurationTicks: bigint;
   enableTestAdmin: boolean;
 }
 
@@ -123,6 +125,7 @@ interface GeneratorRow {
   expireTick: bigint;
   ownerPlayerId: string;
   state: string;
+  reservedByPlayerId: string;
   isConnected: boolean;
   output: number;
   effectiveOutput: number;
@@ -169,6 +172,13 @@ interface EventLogRow {
   payloadJson: string;
 }
 
+interface CaptureAttemptRow {
+  generatorId: string;
+  playerId: string;
+  startTick: bigint;
+  finishTick: bigint;
+}
+
 interface GridCell {
   x: number;
   y: number;
@@ -205,6 +215,7 @@ const worldConfigTable = table(
     worldHeight: t.u32(),
     tileSizePx: t.u16(),
     interactRangeCells: t.u32(),
+    captureDurationTicks: t.u64(),
     enableTestAdmin: t.bool(),
   },
 );
@@ -290,10 +301,21 @@ const generatorTable = table(
     expireTick: t.u64(),
     ownerPlayerId: t.string(),
     state: t.string(),
+    reservedByPlayerId: t.string(),
     isConnected: t.bool(),
     output: t.i32(),
     effectiveOutput: t.i32(),
     lastNetworkSolveTick: t.u64(),
+  },
+);
+
+const captureAttemptTable = table(
+  { public: true },
+  {
+    generatorId: t.string().primaryKey(),
+    playerId: t.string(),
+    startTick: t.u64(),
+    finishTick: t.u64(),
   },
 );
 
@@ -373,6 +395,7 @@ const spacetimedb = schema({
   line: lineTable,
   rootNode: rootNodeTable,
   rootRelocation: rootRelocationTable,
+  captureAttempt: captureAttemptTable,
   eventLog: eventLogTable,
   tickSchedule: tickScheduleTable,
 });
@@ -691,6 +714,15 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
         existing.interactRangeCells >= 0
           ? existing.interactRangeCells
           : DEFAULT_INTERACT_RANGE_CELLS,
+      captureDurationTicks:
+        (existing as Partial<WorldConfigRow>).captureDurationTicks &&
+        (existing as Partial<WorldConfigRow>).captureDurationTicks! > 0n
+          ? (existing as Partial<WorldConfigRow>).captureDurationTicks!
+          : defaultCaptureDurationTicks(
+              hasLegacyTimingDefaults
+                ? DEFAULT_TICKS_PER_MINUTE
+                : existing.ticksPerMinute,
+            ),
     };
     if (
       normalized.ticksPerDay !== existing.ticksPerDay ||
@@ -701,7 +733,9 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
       normalized.worldWidth !== existing.worldWidth ||
       normalized.worldHeight !== existing.worldHeight ||
       normalized.tileSizePx !== existing.tileSizePx ||
-      normalized.interactRangeCells !== existing.interactRangeCells
+      normalized.interactRangeCells !== existing.interactRangeCells ||
+      normalized.captureDurationTicks !==
+        (existing as Partial<WorldConfigRow>).captureDurationTicks
     ) {
       ctx.db.worldConfig.id.update(normalized);
     }
@@ -720,6 +754,7 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
     worldHeight: DEFAULT_WORLD_HEIGHT,
     tileSizePx: DEFAULT_TILE_SIZE_PX,
     interactRangeCells: DEFAULT_INTERACT_RANGE_CELLS,
+    captureDurationTicks: defaultCaptureDurationTicks(DEFAULT_TICKS_PER_MINUTE),
     enableTestAdmin: false,
   };
   ctx.db.worldConfig.insert(created);
@@ -804,7 +839,8 @@ function waveTimingFromConfig(config: WorldConfigRow): WaveTiming {
     config.waveSize <= 0 ||
     config.worldWidth <= 0 ||
     config.worldHeight <= 0 ||
-    config.tileSizePx <= 0
+    config.tileSizePx <= 0 ||
+    config.captureDurationTicks <= 0n
   ) {
     throw new Error("worldConfig values must be positive");
   }
@@ -824,6 +860,12 @@ function waveTimingFromConfig(config: WorldConfigRow): WaveTiming {
   };
 }
 
+function defaultCaptureDurationTicks(
+  ticksPerMinute: number,
+): bigint {
+  return BigInt(ticksPerMinute) * BigInt(DEFAULT_CAPTURE_DURATION_MINUTES);
+}
+
 function rootMoveCooldownTicks(config: WorldConfigRow): bigint {
   return BigInt(config.ticksPerDay) * BigInt(ROOT_MOVE_COOLDOWN_DAYS);
 }
@@ -836,7 +878,7 @@ function setGeneratorControl(
   ctx: any,
   generator: GeneratorRow,
   ownerPlayerId: string,
-  state: "neutral" | "controlled" | "isolated",
+  state: "neutral" | "controlled",
 ): void {
   const isConnected =
     ownerPlayerId !== "" && state === "controlled"
@@ -850,8 +892,20 @@ function setGeneratorControl(
     ...generator,
     ownerPlayerId,
     state,
+    reservedByPlayerId: "",
     isConnected,
     effectiveOutput,
+  });
+}
+
+function setGeneratorReservation(
+  ctx: any,
+  generator: GeneratorRow,
+  reservedByPlayerId: string,
+): void {
+  ctx.db.generator.id.update({
+    ...generator,
+    reservedByPlayerId,
   });
 }
 
@@ -997,6 +1051,7 @@ function materializeWaveGenerators(
         expireTick: currentTick + timing.generatorLifeTicks,
         ownerPlayerId: "",
         state: "neutral",
+        reservedByPlayerId: "",
         isConnected: false,
         output: DEFAULT_GENERATOR_OUTPUT,
         effectiveOutput: 0,
@@ -1071,10 +1126,11 @@ function processCompletedRootRelocations(
       ) as GeneratorRow | null;
       if (
         target &&
-        target.state === "isolated" &&
-        target.ownerPlayerId === ""
+        target.state === "neutral" &&
+        target.ownerPlayerId === "" &&
+        target.reservedByPlayerId === relocation.playerId
       ) {
-        setGeneratorControl(ctx, target, "", "neutral");
+        setGeneratorReservation(ctx, target, "");
       }
     };
 
@@ -1090,7 +1146,12 @@ function processCompletedRootRelocations(
     const toGenerator = ctx.db.generator.id.find(
       relocation.toGeneratorId,
     ) as GeneratorRow | null;
-    if (!toGenerator || toGenerator.state !== "isolated") {
+    if (
+      !toGenerator ||
+      toGenerator.state !== "neutral" ||
+      toGenerator.ownerPlayerId !== "" ||
+      toGenerator.reservedByPlayerId !== relocation.playerId
+    ) {
       releaseTargetIfReserved();
       ctx.db.rootRelocation.playerId.delete(relocation.playerId);
       continue;
@@ -1142,6 +1203,55 @@ function processCompletedRootRelocations(
   }
 }
 
+function processCompletedCaptures(ctx: any, currentTick: bigint): void {
+  const dueCaptures = (Array.from(
+    ctx.db.captureAttempt.iter(),
+  ) as CaptureAttemptRow[])
+    .filter((attempt) => attempt.finishTick <= currentTick)
+    .sort((a, b) => cmpString(a.generatorId, b.generatorId));
+
+  for (const attempt of dueCaptures) {
+    const generator = ctx.db.generator.id.find(
+      attempt.generatorId,
+    ) as GeneratorRow | null;
+    const player = ctx.db.player.playerId.find(
+      attempt.playerId,
+    ) as PlayerRow | null;
+    if (!generator || !player || player.rootGeneratorId === "") {
+      if (
+        generator &&
+        generator.state === "neutral" &&
+        generator.ownerPlayerId === "" &&
+        generator.reservedByPlayerId === attempt.playerId
+      ) {
+        setGeneratorReservation(ctx, generator, "");
+      }
+      ctx.db.captureAttempt.generatorId.delete(attempt.generatorId);
+      continue;
+    }
+
+    if (
+      generator.state !== "neutral" ||
+      generator.ownerPlayerId !== "" ||
+      generator.reservedByPlayerId !== attempt.playerId
+    ) {
+      ctx.db.captureAttempt.generatorId.delete(attempt.generatorId);
+      continue;
+    }
+
+    setGeneratorControl(ctx, generator, attempt.playerId, "controlled");
+    ctx.db.captureAttempt.generatorId.delete(attempt.generatorId);
+    ctx.db.player.playerId.update({
+      ...player,
+      networkDirty: true,
+    });
+    appendEvent(ctx, currentTick, "generatorCaptured", {
+      generatorId: attempt.generatorId,
+      playerId: attempt.playerId,
+    });
+  }
+}
+
 function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
   const expired = (Array.from(ctx.db.generator.iter()) as GeneratorRow[])
     .filter((generator) => currentTick >= generator.expireTick)
@@ -1152,6 +1262,13 @@ function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
   }
 
   for (const generator of expired) {
+    const captureAttempt = ctx.db.captureAttempt.generatorId.find(
+      generator.id,
+    ) as CaptureAttemptRow | null;
+    if (captureAttempt) {
+      ctx.db.captureAttempt.generatorId.delete(generator.id);
+    }
+
     const attachedLines = (Array.from(ctx.db.line.iter()) as LineRow[])
       .filter(
         (line) =>
@@ -1187,10 +1304,11 @@ function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
         ) as GeneratorRow | null;
         if (
           target &&
-          target.state === "isolated" &&
-          target.ownerPlayerId === ""
+          target.state === "neutral" &&
+          target.ownerPlayerId === "" &&
+          target.reservedByPlayerId === player.playerId
         ) {
-          setGeneratorControl(ctx, target, "", "neutral");
+          setGeneratorReservation(ctx, target, "");
         }
       }
 
@@ -1199,6 +1317,27 @@ function cleanupExpiredGenerators(ctx: any, currentTick: bigint): void {
         rootGeneratorId: "",
         networkDirty: true,
       });
+
+      const playerCaptures = (Array.from(
+        ctx.db.captureAttempt.iter(),
+      ) as CaptureAttemptRow[])
+        .filter((attempt) => attempt.playerId === player.playerId)
+        .sort((a, b) => cmpString(a.generatorId, b.generatorId));
+      for (const attempt of playerCaptures) {
+        const target = ctx.db.generator.id.find(
+          attempt.generatorId,
+        ) as GeneratorRow | null;
+        if (
+          target &&
+          target.state === "neutral" &&
+          target.ownerPlayerId === "" &&
+          target.reservedByPlayerId === player.playerId
+        ) {
+          setGeneratorReservation(ctx, target, "");
+        }
+        ctx.db.captureAttempt.generatorId.delete(attempt.generatorId);
+      }
+
       ctx.db.rootNode.playerId.delete(player.playerId);
       ctx.db.rootRelocation.playerId.delete(player.playerId);
     }
@@ -1867,6 +2006,7 @@ function processTick(ctx: any): void {
 
   const currentTick = world.currentTick;
   processCompletedRootRelocations(ctx, config, currentTick);
+  processCompletedCaptures(ctx, currentTick);
   const due = (Array.from(ctx.db.pendingAction.iter()) as PendingActionRow[])
     .filter((action) => action.tick <= currentTick)
     .sort((a, b) => {
@@ -2167,7 +2307,11 @@ export const placeRoot = spacetimedb.reducer(
     if (!generator) {
       throw new Error("generator not found");
     }
-    if (generator.state !== "neutral" || generator.ownerPlayerId !== "") {
+    if (
+      generator.state !== "neutral" ||
+      generator.ownerPlayerId !== "" ||
+      generator.reservedByPlayerId !== ""
+    ) {
       throw new Error("root can only be placed on neutral generator");
     }
     if (
@@ -2239,7 +2383,11 @@ export const startMoveRoot = spacetimedb.reducer(
     if (!toGenerator) {
       throw new Error("target generator not found");
     }
-    if (toGenerator.state !== "neutral" || toGenerator.ownerPlayerId !== "") {
+    if (
+      toGenerator.state !== "neutral" ||
+      toGenerator.ownerPlayerId !== "" ||
+      toGenerator.reservedByPlayerId !== ""
+    ) {
       throw new Error("target generator must be neutral");
     }
     if (
@@ -2252,7 +2400,7 @@ export const startMoveRoot = spacetimedb.reducer(
       throw new Error("player is out of interact range for root relocation");
     }
 
-    setGeneratorControl(ctx, toGenerator, "", "isolated");
+    setGeneratorReservation(ctx, toGenerator, playerId);
     ctx.db.player.playerId.update({
       ...player,
       networkDirty: true,
@@ -2268,6 +2416,89 @@ export const startMoveRoot = spacetimedb.reducer(
       playerId,
       fromGeneratorId: player.rootGeneratorId,
       toGeneratorId: newGeneratorId,
+    });
+  },
+);
+
+export const startCaptureGenerator = spacetimedb.reducer(
+  {
+    generatorId: t.string(),
+  },
+  (ctx, { generatorId }) => {
+    const { world, config, playerId, player } = requireJoined(ctx);
+    if (player.rootGeneratorId === "") {
+      throw new Error("player must place root before capturing generators");
+    }
+
+    const generator = ctx.db.generator.id.find(
+      generatorId,
+    ) as GeneratorRow | null;
+    if (!generator) {
+      throw new Error("generator not found");
+    }
+    if (
+      generator.state !== "neutral" ||
+      generator.ownerPlayerId !== "" ||
+      generator.reservedByPlayerId !== ""
+    ) {
+      throw new Error("only unreserved neutral generators can be captured");
+    }
+    if (
+      !isPlayerInRangeOfGenerator(player, generator, config.interactRangeCells)
+    ) {
+      throw new Error("player is out of interact range for capture");
+    }
+    if (ctx.db.captureAttempt.generatorId.find(generatorId)) {
+      throw new Error("capture already in progress for this generator");
+    }
+
+    const finishTick = world.currentTick + config.captureDurationTicks;
+    ctx.db.captureAttempt.insert({
+      generatorId,
+      playerId,
+      startTick: world.currentTick,
+      finishTick,
+    });
+    setGeneratorReservation(ctx, generator, playerId);
+    appendEvent(ctx, world.currentTick, "generatorCaptureStarted", {
+      generatorId,
+      playerId,
+      finishTick: finishTick.toString(),
+    });
+  },
+);
+
+export const cancelCapture = spacetimedb.reducer(
+  {
+    generatorId: t.string(),
+  },
+  (ctx, { generatorId }) => {
+    const { world, playerId } = requireJoined(ctx);
+    const attempt = ctx.db.captureAttempt.generatorId.find(
+      generatorId,
+    ) as CaptureAttemptRow | null;
+    if (!attempt) {
+      throw new Error("capture attempt not found");
+    }
+    if (attempt.playerId !== playerId) {
+      throw new Error("cannot cancel another player's capture");
+    }
+
+    ctx.db.captureAttempt.generatorId.delete(generatorId);
+
+    const generator = ctx.db.generator.id.find(generatorId) as GeneratorRow | null;
+    if (
+      generator &&
+      generator.state === "neutral" &&
+      generator.ownerPlayerId === "" &&
+      generator.reservedByPlayerId === playerId
+    ) {
+      setGeneratorReservation(ctx, generator, "");
+    }
+
+    appendEvent(ctx, world.currentTick, "generatorCaptureCancelled", {
+      generatorId,
+      playerId,
     });
   },
 );
@@ -2383,6 +2614,7 @@ export const updateWorldConfig = spacetimedb.reducer(
       markerLeadDays,
       generatorLifeDays,
       waveSize,
+      captureDurationTicks: defaultCaptureDurationTicks(ticksPerMinute),
     };
     waveTimingFromConfig(next);
     ctx.db.worldConfig.id.update(next);
@@ -2445,7 +2677,11 @@ export const adminClaimGenerator = spacetimedb.reducer(
     if (!generator) {
       throw new Error("generator not found");
     }
-    if (generator.ownerPlayerId !== "" || generator.state !== "neutral") {
+    if (
+      generator.ownerPlayerId !== "" ||
+      generator.state !== "neutral" ||
+      generator.reservedByPlayerId !== ""
+    ) {
       throw new Error("generator must be neutral to claim");
     }
 

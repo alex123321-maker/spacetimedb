@@ -10,6 +10,14 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const CaptureAttempt = __t.object("CaptureAttempt", {
+  generatorId: __t.string(),
+  playerId: __t.string(),
+  startTick: __t.u64(),
+  finishTick: __t.u64(),
+});
+export type CaptureAttempt = __Infer<typeof CaptureAttempt>;
+
 export const EventLog = __t.object("EventLog", {
   id: __t.string(),
   tick: __t.u64(),
@@ -26,6 +34,7 @@ export const Generator = __t.object("Generator", {
   expireTick: __t.u64(),
   ownerPlayerId: __t.string(),
   state: __t.string(),
+  reservedByPlayerId: __t.string(),
   isConnected: __t.bool(),
   output: __t.i32(),
   effectiveOutput: __t.i32(),
@@ -146,6 +155,7 @@ export const WorldConfig = __t.object("WorldConfig", {
   worldHeight: __t.u32(),
   tileSizePx: __t.u16(),
   interactRangeCells: __t.u32(),
+  captureDurationTicks: __t.u64(),
   enableTestAdmin: __t.bool(),
 });
 export type WorldConfig = __Infer<typeof WorldConfig>;
