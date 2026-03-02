@@ -11,6 +11,6 @@ import {
 } from "spacetimedb";
 
 export default {
-  cellX: __t.i32(),
-  cellY: __t.i32(),
+  targetPosX: __t.i64(),
+  targetPosY: __t.i64(),
 };

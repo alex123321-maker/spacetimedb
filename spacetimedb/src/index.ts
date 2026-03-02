@@ -11,19 +11,19 @@ const ACTION_BUDGET_PER_TICK = 5;
 const FIXED_SCALE = 1000n;
 const SEED = 12345;
 
-const DEFAULT_TICKS_PER_DAY = 20;
-const DEFAULT_WAVE_EVERY_DAYS = 3;
+const DEFAULT_TICKS_PER_DAY = 6000;
+const DEFAULT_WAVE_EVERY_DAYS = 2;
 const DEFAULT_MARKER_LEAD_DAYS = 1;
-const DEFAULT_GENERATOR_LIFE_DAYS = 9;
+const DEFAULT_GENERATOR_LIFE_DAYS = 6;
 const DEFAULT_WAVE_SIZE = 12;
-const DEFAULT_TICKS_PER_MINUTE = 1;
+const DEFAULT_TICKS_PER_MINUTE = 1200;
 const ROOT_MOVE_COOLDOWN_DAYS = 24;
 const ROOT_MOVE_DURATION_MINUTES = 10;
 const DEFAULT_WORLD_WIDTH = 128;
 const DEFAULT_WORLD_HEIGHT = 128;
 const DEFAULT_TILE_SIZE_PX = 16;
 const DEFAULT_INTERACT_RANGE_CELLS = 3;
-const DEFAULT_PLAYER_SPEED_CELLS_PER_TICK = 1;
+const DEFAULT_PLAYER_SPEED_FIXED_PER_TICK = 100n;
 const DEFAULT_JUNK_COUNT = 200;
 const DEFAULT_JUNK_KIND_COUNT = 4;
 const DEFAULT_LINE_CAPACITY = 150;
@@ -66,10 +66,10 @@ interface PlayerRow {
   playerId: string;
   posX: bigint;
   posY: bigint;
-  targetX: number;
-  targetY: number;
+  targetPosX: bigint;
+  targetPosY: bigint;
   moving: boolean;
-  speedCellsPerTick: number;
+  speedFixedPerTick: bigint;
   lastProcessedTick: bigint;
   lastUpdatedTick: bigint;
   rootGeneratorId: string;
@@ -215,10 +215,10 @@ const playerTable = table(
     playerId: t.string().primaryKey(),
     posX: t.i64(),
     posY: t.i64(),
-    targetX: t.i32(),
-    targetY: t.i32(),
+    targetPosX: t.i64(),
+    targetPosY: t.i64(),
     moving: t.bool(),
-    speedCellsPerTick: t.u16(),
+    speedFixedPerTick: t.i64(),
     lastProcessedTick: t.u64(),
     lastUpdatedTick: t.u64(),
     rootGeneratorId: t.string(),
@@ -496,12 +496,35 @@ function clampToWorld(
   };
 }
 
+function clampFixedToWorld(
+  config: WorldConfigRow,
+  posX: bigint,
+  posY: bigint,
+): { x: bigint; y: bigint } {
+  const maxX = BigInt(config.worldWidth) * FIXED_SCALE - 1n;
+  const maxY = BigInt(config.worldHeight) * FIXED_SCALE - 1n;
+  const clampedX = posX < 0n ? 0n : posX > maxX ? maxX : posX;
+  const clampedY = posY < 0n ? 0n : posY > maxY ? maxY : posY;
+  return { x: clampedX, y: clampedY };
+}
+
+function fixedToCell(value: bigint): number {
+  return Number(value / FIXED_SCALE);
+}
+
+function fixedPointToCell(posX: bigint, posY: bigint): GridCell {
+  return {
+    x: fixedToCell(posX),
+    y: fixedToCell(posY),
+  };
+}
+
 function playerCellX(player: PlayerRow): number {
-  return Number(player.posX / FIXED_SCALE);
+  return fixedToCell(player.posX);
 }
 
 function playerCellY(player: PlayerRow): number {
-  return Number(player.posY / FIXED_SCALE);
+  return fixedToCell(player.posY);
 }
 
 function isBlockedCell(
@@ -514,6 +537,16 @@ function isBlockedCell(
     return true;
   }
   return Boolean(ctx.db.obstacle.id.find(cellId(cellX, cellY)));
+}
+
+function isBlockedFixedPosition(
+  ctx: any,
+  config: WorldConfigRow,
+  posX: bigint,
+  posY: bigint,
+): boolean {
+  const cell = fixedPointToCell(posX, posY);
+  return isBlockedCell(ctx, config, cell.x, cell.y);
 }
 
 function isPlayerInRangeOfGenerator(
@@ -624,8 +657,30 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
     WORLD_CONFIG_ID,
   ) as WorldConfigRow | null;
   if (existing) {
+    const hasLegacyTimingDefaults =
+      existing.ticksPerDay === 20 &&
+      existing.ticksPerMinute === 1 &&
+      existing.waveEveryDays === 3 &&
+      existing.markerLeadDays === 1 &&
+      existing.generatorLifeDays === 9;
+
     const normalized: WorldConfigRow = {
       ...existing,
+      ticksPerDay: hasLegacyTimingDefaults
+        ? DEFAULT_TICKS_PER_DAY
+        : existing.ticksPerDay,
+      ticksPerMinute: hasLegacyTimingDefaults
+        ? DEFAULT_TICKS_PER_MINUTE
+        : existing.ticksPerMinute,
+      waveEveryDays: hasLegacyTimingDefaults
+        ? DEFAULT_WAVE_EVERY_DAYS
+        : existing.waveEveryDays,
+      markerLeadDays: hasLegacyTimingDefaults
+        ? DEFAULT_MARKER_LEAD_DAYS
+        : existing.markerLeadDays,
+      generatorLifeDays: hasLegacyTimingDefaults
+        ? DEFAULT_GENERATOR_LIFE_DAYS
+        : existing.generatorLifeDays,
       worldWidth:
         existing.worldWidth > 0 ? existing.worldWidth : DEFAULT_WORLD_WIDTH,
       worldHeight:
@@ -638,6 +693,11 @@ function ensureWorldConfig(ctx: any): WorldConfigRow {
           : DEFAULT_INTERACT_RANGE_CELLS,
     };
     if (
+      normalized.ticksPerDay !== existing.ticksPerDay ||
+      normalized.ticksPerMinute !== existing.ticksPerMinute ||
+      normalized.waveEveryDays !== existing.waveEveryDays ||
+      normalized.markerLeadDays !== existing.markerLeadDays ||
+      normalized.generatorLifeDays !== existing.generatorLifeDays ||
       normalized.worldWidth !== existing.worldWidth ||
       normalized.worldHeight !== existing.worldHeight ||
       normalized.tileSizePx !== existing.tileSizePx ||
@@ -958,6 +1018,41 @@ function materializeWaveGenerators(
   }
 }
 
+function bootstrapWaveIfWorldEmpty(
+  ctx: any,
+  world: WorldStateRow,
+  config: WorldConfigRow,
+  timing: WaveTiming,
+  currentTick: bigint,
+): void {
+  for (const _ of ctx.db.generator.iter() as Iterable<GeneratorRow>) {
+    return;
+  }
+  for (const _ of ctx.db.spawnMarker.iter() as Iterable<SpawnMarkerRow>) {
+    return;
+  }
+
+  const positions = generateWaveCells(
+    ctx,
+    config,
+    world.seed,
+    currentTick,
+    timing.waveSize,
+  );
+
+  for (let i = 0; i < positions.length; i += 1) {
+    const cell = positions[i];
+    ctx.db.spawnMarker.insert({
+      id: spawnMarkerId(currentTick, i),
+      x: cell.x,
+      y: cell.y,
+      spawnTick: currentTick,
+    });
+  }
+
+  materializeWaveGenerators(ctx, timing, currentTick);
+}
+
 function processCompletedRootRelocations(
   ctx: any,
   config: WorldConfigRow,
@@ -1124,6 +1219,8 @@ function runWaveLifecycle(
   const currentTick = world.currentTick;
   const timing = waveTimingFromConfig(config);
 
+  bootstrapWaveIfWorldEmpty(ctx, world, config, timing, currentTick);
+
   const markerPhase = timing.waveEveryTicks - timing.markerLeadTicks;
   if (currentTick % timing.waveEveryTicks === markerPhase) {
     spawnWaveMarkers(ctx, world, config, timing, currentTick);
@@ -1195,32 +1292,109 @@ function applyMoveInternal(
   return true;
 }
 
-function buildStepCandidates(
-  dxToTarget: number,
-  dyToTarget: number,
-): GridCell[] {
-  const absDx = Math.abs(dxToTarget);
-  const absDy = Math.abs(dyToTarget);
-  const sx = dxToTarget === 0 ? 0 : dxToTarget > 0 ? 1 : -1;
-  const sy = dyToTarget === 0 ? 0 : dyToTarget > 0 ? 1 : -1;
+function absBigInt(value: bigint): bigint {
+  return value < 0n ? -value : value;
+}
 
-  if (absDx === 0 && absDy === 0) {
-    return [];
+function maxBigInt(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
+}
+
+function signBigInt(value: bigint): bigint {
+  if (value > 0n) return 1n;
+  if (value < 0n) return -1n;
+  return 0n;
+}
+
+function computeFixedStepTowardTarget(
+  dx: bigint,
+  dy: bigint,
+  speed: bigint,
+): { stepX: bigint; stepY: bigint } {
+  const ax = absBigInt(dx);
+  const ay = absBigInt(dy);
+  if (ax === 0n && ay === 0n) {
+    return { stepX: 0n, stepY: 0n };
   }
-  if (absDx >= absDy) {
-    return absDy === 0
-      ? [{ x: sx, y: 0 }]
-      : [
-          { x: sx, y: 0 },
-          { x: 0, y: sy },
-        ];
+
+  if (ax >= ay) {
+    const stepX = signBigInt(dx) * (speed < ax ? speed : ax);
+    const stepY = ax === 0n ? 0n : (dy * absBigInt(stepX)) / ax;
+    return { stepX, stepY };
   }
-  return absDx === 0
-    ? [{ x: 0, y: sy }]
-    : [
-        { x: 0, y: sy },
-        { x: sx, y: 0 },
-      ];
+
+  const stepY = signBigInt(dy) * (speed < ay ? speed : ay);
+  const stepX = ay === 0n ? 0n : (dx * absBigInt(stepY)) / ay;
+  return { stepX, stepY };
+}
+
+function applyFixedStepWithCollision(
+  ctx: any,
+  config: WorldConfigRow,
+  startPosX: bigint,
+  startPosY: bigint,
+  stepX: bigint,
+  stepY: bigint,
+): { posX: bigint; posY: bigint; moved: boolean; blockedCompletely: boolean } {
+  const maxSubstep = FIXED_SCALE / 2n;
+  const maxComponent = maxBigInt(absBigInt(stepX), absBigInt(stepY));
+  const substepCountRaw =
+    maxComponent === 0n ? 1n : (maxComponent + maxSubstep - 1n) / maxSubstep;
+  const substepCount = Number(substepCountRaw > 10_000n ? 10_000n : substepCountRaw);
+  const substepCountBig = BigInt(Math.max(1, substepCount));
+
+  let posX = startPosX;
+  let posY = startPosY;
+  let blockedCompletely = false;
+
+  for (let substepIndex = 1; substepIndex <= substepCount; substepIndex += 1) {
+    const substepBig = BigInt(substepIndex);
+    const targetPosX = startPosX + (stepX * substepBig) / substepCountBig;
+    const targetPosY = startPosY + (stepY * substepBig) / substepCountBig;
+
+    const beforeX = posX;
+    const beforeY = posY;
+    const wantsX = targetPosX !== beforeX;
+    const wantsY = targetPosY !== beforeY;
+
+    let blockedX = false;
+    let blockedY = false;
+
+    if (wantsX) {
+      if (isBlockedFixedPosition(ctx, config, targetPosX, posY)) {
+        blockedX = true;
+      } else {
+        posX = targetPosX;
+      }
+    }
+
+    if (wantsY) {
+      if (isBlockedFixedPosition(ctx, config, posX, targetPosY)) {
+        blockedY = true;
+      } else {
+        posY = targetPosY;
+      }
+    }
+
+    if (posX === beforeX && posY === beforeY) {
+      if (!wantsX && !wantsY) {
+        continue;
+      }
+      const xStuck = !wantsX || blockedX;
+      const yStuck = !wantsY || blockedY;
+      if (xStuck && yStuck) {
+        blockedCompletely = true;
+        break;
+      }
+    }
+  }
+
+  return {
+    posX,
+    posY,
+    moved: posX !== startPosX || posY !== startPosY,
+    blockedCompletely,
+  };
 }
 
 function applyPlayerMovement(
@@ -1234,96 +1408,105 @@ function applyPlayerMovement(
 
   for (const player of players) {
     if (!player.moving) continue;
+    const latest = ctx.db.player.playerId.find(player.playerId) as PlayerRow | null;
+    if (!latest || !latest.moving) continue;
 
-    const maxSteps = Math.max(1, player.speedCellsPerTick);
-    for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
-      const latest = ctx.db.player.playerId.find(
-        player.playerId,
-      ) as PlayerRow | null;
-      if (!latest || !latest.moving) {
-        break;
-      }
+    const speed =
+      latest.speedFixedPerTick > 0n
+        ? latest.speedFixedPerTick
+        : DEFAULT_PLAYER_SPEED_FIXED_PER_TICK;
+    const clampedTarget = clampFixedToWorld(
+      config,
+      latest.targetPosX,
+      latest.targetPosY,
+    );
+    const targetCell = fixedPointToCell(clampedTarget.x, clampedTarget.y);
+    const targetBlocked = isBlockedCell(ctx, config, targetCell.x, targetCell.y);
+    const normalizedTargetX = targetBlocked ? latest.posX : clampedTarget.x;
+    const normalizedTargetY = targetBlocked ? latest.posY : clampedTarget.y;
+    const normalizedMoving = targetBlocked ? false : latest.moving;
 
-      const currentCell = { x: playerCellX(latest), y: playerCellY(latest) };
-      const clampedTarget = clampToWorld(
-        config,
-        latest.targetX,
-        latest.targetY,
-      );
-      if (
-        latest.targetX !== clampedTarget.x ||
-        latest.targetY !== clampedTarget.y
-      ) {
-        ctx.db.player.playerId.update({
-          ...latest,
-          targetX: clampedTarget.x,
-          targetY: clampedTarget.y,
-        });
-      }
-
-      if (
-        currentCell.x === clampedTarget.x &&
-        currentCell.y === clampedTarget.y
-      ) {
-        ctx.db.player.playerId.update({
-          ...latest,
-          targetX: currentCell.x,
-          targetY: currentCell.y,
-          moving: false,
-        });
-        break;
-      }
-
-      const candidates = buildStepCandidates(
-        clampedTarget.x - currentCell.x,
-        clampedTarget.y - currentCell.y,
-      );
-      let moved = false;
-      for (const step of candidates) {
-        moved = applyMoveInternal(
-          ctx,
-          config,
-          latest.playerId,
-          step.x,
-          step.y,
-          currentTick,
-        );
-        if (moved) {
-          break;
-        }
-      }
-
-      const afterStep = ctx.db.player.playerId.find(
-        player.playerId,
-      ) as PlayerRow | null;
-      if (!afterStep) {
-        break;
-      }
-
-      const afterCell = {
-        x: playerCellX(afterStep),
-        y: playerCellY(afterStep),
-      };
-      if (!moved) {
-        ctx.db.player.playerId.update({
-          ...afterStep,
-          targetX: afterCell.x,
-          targetY: afterCell.y,
-          moving: false,
-        });
-        break;
-      }
-
-      if (afterCell.x === clampedTarget.x && afterCell.y === clampedTarget.y) {
-        ctx.db.player.playerId.update({
-          ...afterStep,
-          targetX: clampedTarget.x,
-          targetY: clampedTarget.y,
-          moving: false,
-        });
-        break;
-      }
+    if (
+      latest.targetPosX !== normalizedTargetX ||
+      latest.targetPosY !== normalizedTargetY ||
+      latest.speedFixedPerTick !== speed ||
+      latest.moving !== normalizedMoving
+    ) {
+      ctx.db.player.playerId.update({
+        ...latest,
+        targetPosX: normalizedTargetX,
+        targetPosY: normalizedTargetY,
+        moving: normalizedMoving,
+        speedFixedPerTick: speed,
+      });
     }
+
+    if (targetBlocked) {
+      continue;
+    }
+
+    const dx = normalizedTargetX - latest.posX;
+    const dy = normalizedTargetY - latest.posY;
+    const remaining = maxBigInt(absBigInt(dx), absBigInt(dy));
+    if (remaining <= speed) {
+      ctx.db.player.playerId.update({
+        ...latest,
+        posX: normalizedTargetX,
+        posY: normalizedTargetY,
+        targetPosX: normalizedTargetX,
+        targetPosY: normalizedTargetY,
+        moving: false,
+        speedFixedPerTick: speed,
+        lastProcessedTick: currentTick,
+        lastUpdatedTick: currentTick,
+      });
+      continue;
+    }
+
+    const { stepX, stepY } = computeFixedStepTowardTarget(dx, dy, speed);
+    const stepResult = applyFixedStepWithCollision(
+      ctx,
+      config,
+      latest.posX,
+      latest.posY,
+      stepX,
+      stepY,
+    );
+
+    if (!stepResult.moved) {
+      ctx.db.player.playerId.update({
+        ...latest,
+        targetPosX: latest.posX,
+        targetPosY: latest.posY,
+        moving: false,
+        speedFixedPerTick: speed,
+        lastProcessedTick: currentTick,
+        lastUpdatedTick: currentTick,
+      });
+      if (stepResult.blockedCompletely) {
+        appendEvent(ctx, currentTick, "moveBlocked", {
+          playerId: latest.playerId,
+          posX: latest.posX.toString(),
+          posY: latest.posY.toString(),
+        });
+      }
+      continue;
+    }
+
+    const reachedTarget =
+      stepResult.posX === normalizedTargetX &&
+      stepResult.posY === normalizedTargetY;
+    ctx.db.player.playerId.update({
+      ...latest,
+      posX: stepResult.posX,
+      posY: stepResult.posY,
+      targetPosX: normalizedTargetX,
+      targetPosY: normalizedTargetY,
+      moving: !reachedTarget,
+      speedFixedPerTick: speed,
+      lastProcessedTick: currentTick,
+      lastUpdatedTick: currentTick,
+    });
   }
 }
 
@@ -1745,20 +1928,41 @@ function requireJoined(ctx: any): {
     throw new Error("player must call joinPlayer first");
   }
 
-  const clampedTarget = clampToWorld(config, player.targetX, player.targetY);
+  const clampedTarget = clampFixedToWorld(
+    config,
+    player.targetPosX,
+    player.targetPosY,
+  );
+  const clampedTargetCell = fixedPointToCell(clampedTarget.x, clampedTarget.y);
+  const targetBlocked = isBlockedCell(
+    ctx,
+    config,
+    clampedTargetCell.x,
+    clampedTargetCell.y,
+  );
+  const normalizedTargetX = targetBlocked
+    ? player.posX
+    : clampedTarget.x;
+  const normalizedTargetY = targetBlocked
+    ? player.posY
+    : clampedTarget.y;
   const normalized: PlayerRow = {
     ...player,
-    targetX: clampedTarget.x,
-    targetY: clampedTarget.y,
-    speedCellsPerTick:
-      player.speedCellsPerTick > 0
-        ? player.speedCellsPerTick
-        : DEFAULT_PLAYER_SPEED_CELLS_PER_TICK,
+    targetPosX: normalizedTargetX,
+    targetPosY: normalizedTargetY,
+    moving:
+      player.moving &&
+      !(normalizedTargetX === player.posX && normalizedTargetY === player.posY),
+    speedFixedPerTick:
+      player.speedFixedPerTick > 0n
+        ? player.speedFixedPerTick
+        : DEFAULT_PLAYER_SPEED_FIXED_PER_TICK,
   };
   if (
-    normalized.targetX !== player.targetX ||
-    normalized.targetY !== player.targetY ||
-    normalized.speedCellsPerTick !== player.speedCellsPerTick
+    normalized.targetPosX !== player.targetPosX ||
+    normalized.targetPosY !== player.targetPosY ||
+    normalized.moving !== player.moving ||
+    normalized.speedFixedPerTick !== player.speedFixedPerTick
   ) {
     ctx.db.player.playerId.update(normalized);
   }
@@ -1813,10 +2017,10 @@ export const joinPlayer = spacetimedb.reducer((ctx) => {
       playerId,
       posX: 0n,
       posY: 0n,
-      targetX: 0,
-      targetY: 0,
+      targetPosX: 0n,
+      targetPosY: 0n,
       moving: false,
-      speedCellsPerTick: DEFAULT_PLAYER_SPEED_CELLS_PER_TICK,
+      speedFixedPerTick: DEFAULT_PLAYER_SPEED_FIXED_PER_TICK,
       lastProcessedTick: world.currentTick,
       lastUpdatedTick: world.currentTick,
       rootGeneratorId: "",
@@ -1905,36 +2109,41 @@ export const enqueueAction = spacetimedb.reducer(
 
 export const setMoveTarget = spacetimedb.reducer(
   {
-    cellX: t.i32(),
-    cellY: t.i32(),
+    targetPosX: t.i64(),
+    targetPosY: t.i64(),
   },
-  (ctx, { cellX, cellY }) => {
-    const { config, player } = requireJoined(ctx);
-    if (!isInsideWorld(config, cellX, cellY)) {
-      throw new Error("target is outside world bounds");
-    }
-    if (isBlockedCell(ctx, config, cellX, cellY)) {
+  (ctx, { targetPosX, targetPosY }) => {
+    const { world, config, playerId, player } = requireJoined(ctx);
+    const clampedTarget = clampFixedToWorld(config, targetPosX, targetPosY);
+    const targetCell = fixedPointToCell(clampedTarget.x, clampedTarget.y);
+    if (isBlockedCell(ctx, config, targetCell.x, targetCell.y)) {
       throw new Error("target cell is blocked");
     }
 
-    const currentCell = { x: playerCellX(player), y: playerCellY(player) };
-    const moving = !(currentCell.x === cellX && currentCell.y === cellY);
+    const moving = !(
+      player.posX === clampedTarget.x && player.posY === clampedTarget.y
+    );
     ctx.db.player.playerId.update({
       ...player,
-      targetX: cellX,
-      targetY: cellY,
+      targetPosX: clampedTarget.x,
+      targetPosY: clampedTarget.y,
       moving,
+    });
+
+    appendEvent(ctx, world.currentTick, "moveTargetSet", {
+      playerId,
+      targetPosX: clampedTarget.x.toString(),
+      targetPosY: clampedTarget.y.toString(),
     });
   },
 );
 
 export const stopMove = spacetimedb.reducer((ctx) => {
   const { player } = requireJoined(ctx);
-  const currentCell = { x: playerCellX(player), y: playerCellY(player) };
   ctx.db.player.playerId.update({
     ...player,
-    targetX: currentCell.x,
-    targetY: currentCell.y,
+    targetPosX: player.posX,
+    targetPosY: player.posY,
     moving: false,
   });
 });

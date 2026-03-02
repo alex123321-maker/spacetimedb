@@ -3,6 +3,7 @@ import { DbConnection, tables } from "../client/module_bindings";
 
 const shouldRun = process.env.RUN_SPACETIMEDB_INTEGRATION === "1";
 type ReducerMap = Record<string, (args?: unknown) => unknown>;
+const FIXED_SCALE = 1000n;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,6 +33,10 @@ function callReducer(conn: DbConnection, names: string[], args?: unknown): void 
     return;
   }
   throw new Error(`Reducer not found: ${names.join(", ")}`);
+}
+
+function centerFixed(cell: number): bigint {
+  return BigInt(cell) * FIXED_SCALE + FIXED_SCALE / 2n;
 }
 
 async function waitFor(
@@ -156,8 +161,8 @@ describe("SpacetimeDB interact range integration", () => {
       expect(readString(afterFarPlace, "rootGeneratorId", "root_generator_id")).toBe("");
 
       callReducer(conn, ["setMoveTarget", "set_move_target"], {
-        cellX: readNumber(farGenerator ?? {}, "x"),
-        cellY: readNumber(farGenerator ?? {}, "y"),
+        targetPosX: centerFixed(readNumber(farGenerator ?? {}, "x")),
+        targetPosY: centerFixed(readNumber(farGenerator ?? {}, "y")),
       });
 
       await waitFor(

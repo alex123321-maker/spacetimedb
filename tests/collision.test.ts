@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { DbConnection, tables } from "../client/module_bindings";
-import { fx } from "../shared/fixed";
 
 const shouldRun = process.env.RUN_SPACETIMEDB_INTEGRATION === "1";
+const FIXED_SCALE = 1000n;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -12,7 +12,7 @@ type ReducerMap = Record<string, (args?: unknown) => unknown>;
 
 describe("SpacetimeDB collision integration", () => {
   test.runIf(shouldRun)(
-    "Move into obstacle is blocked",
+    "setMoveTarget rejects target inside obstacle cell",
     async () => {
       const host = process.env.STDB_HOST ?? "ws://127.0.0.1:3000";
       const dbName = process.env.STDB_DB_NAME ?? "continuum-grid";
@@ -63,37 +63,45 @@ describe("SpacetimeDB collision integration", () => {
       callReducer(["joinPlayer", "join_player"]);
       await wait(50);
 
-      const worldRows = Array.from(conn.db.worldState.iter()) as Array<
+      const playersBefore = Array.from(conn.db.player.iter()) as Array<
         Record<string, unknown>
       >;
-      const currentTick = Number(
-        (worldRows[0]?.currentTick ?? worldRows[0]?.current_tick ?? 0n) as bigint
+      const meBefore = playersBefore.find(
+        (row) => (row.playerId ?? row.player_id) === myPlayerId,
       );
+      expect(meBefore).toBeDefined();
+      const prevTargetPosX = (meBefore?.targetPosX ?? meBefore?.target_pos_x ?? 0n) as bigint;
+      const prevTargetPosY = (meBefore?.targetPosY ?? meBefore?.target_pos_y ?? 0n) as bigint;
 
-      callReducer(["enqueueAction", "enqueue_action"], {
-        actionType: "Move",
-        tick: BigInt(currentTick + 1),
-        seq: 1n,
-        payloadJson: JSON.stringify({
-          dx: adjacentObstacle?.x ?? 1,
-          dy: adjacentObstacle?.y ?? 0,
-        })
-      });
+      const obstacleTargetPosX =
+        BigInt(adjacentObstacle?.x ?? 1) * FIXED_SCALE + FIXED_SCALE / 2n;
+      const obstacleTargetPosY =
+        BigInt(adjacentObstacle?.y ?? 0) * FIXED_SCALE + FIXED_SCALE / 2n;
+      try {
+        callReducer(["setMoveTarget", "set_move_target"], {
+          targetPosX: obstacleTargetPosX,
+          targetPosY: obstacleTargetPosY,
+        });
+      } catch {
+        // Reducer can throw synchronously.
+      }
 
-      await wait(250);
+      await wait(150);
 
-      const players = Array.from(conn.db.player.iter()) as Array<
+      const playersAfter = Array.from(conn.db.player.iter()) as Array<
         Record<string, unknown>
       >;
-      const me = players.find(
+      const meAfter = playersAfter.find(
         (row) => (row.playerId ?? row.player_id) === myPlayerId
       );
 
-      expect(me).toBeDefined();
-      const posX = Number((me?.posX ?? me?.pos_x ?? 0n) as bigint);
-      const posY = Number((me?.posY ?? me?.pos_y ?? 0n) as bigint);
-      expect(posX).toBe(fx(0));
-      expect(posY).toBe(fx(0));
+      expect(meAfter).toBeDefined();
+      const nextTargetPosX = (meAfter?.targetPosX ?? meAfter?.target_pos_x ?? 0n) as bigint;
+      const nextTargetPosY = (meAfter?.targetPosY ?? meAfter?.target_pos_y ?? 0n) as bigint;
+      expect(nextTargetPosX === obstacleTargetPosX).toBeFalsy();
+      expect(nextTargetPosY === obstacleTargetPosY).toBeFalsy();
+      expect(nextTargetPosX).toBe(prevTargetPosX);
+      expect(nextTargetPosY).toBe(prevTargetPosY);
     },
     15_000
   );

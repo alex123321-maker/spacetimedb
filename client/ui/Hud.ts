@@ -1,4 +1,4 @@
-import type { Generator, Line, Player } from "../module_bindings/types";
+import type { Generator, Player } from "../module_bindings/types";
 import { NetClient, type WorldSnapshot } from "../net/NetClient";
 import { Selection } from "../game/Selection";
 
@@ -8,10 +8,6 @@ function getMaxLines(controlledCount: number): number {
   const maxLines =
     4 + controlledCount * 2 - Math.floor((controlledCount * controlledCount) / 10);
   return Math.max(4, maxLines);
-}
-
-function normalizedLineKey(aId: string, bId: string): string {
-  return aId <= bId ? `${aId}<->${bId}` : `${bId}<->${aId}`;
 }
 
 function playerCell(player: Player): { x: number; y: number } {
@@ -28,15 +24,29 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
+interface HoverGeneratorPayload {
+  generatorId: string;
+  screenX: number;
+  screenY: number;
+}
+
 export class Hud {
   private readonly root: HTMLElement;
   private readonly statusEl: HTMLElement;
   private readonly selectedEl: HTMLElement;
   private readonly actionsEl: HTMLElement;
-  private readonly linesEl: HTMLElement;
+  private readonly networkEl: HTMLElement;
   private readonly errorEl: HTMLElement;
+  private readonly hoverTooltipEl: HTMLElement;
 
-  constructor(container: HTMLElement, private readonly net: NetClient, private readonly selection: Selection) {
+  private lastSnapshot: WorldSnapshot | null = null;
+  private hoverPayload: HoverGeneratorPayload | null = null;
+
+  constructor(
+    container: HTMLElement,
+    private readonly net: NetClient,
+    private readonly selection: Selection,
+  ) {
     this.root = document.createElement("aside");
     this.root.className = "hud";
     this.root.innerHTML = `
@@ -44,9 +54,9 @@ export class Hud {
       <div id="hud-status" class="hud-block"></div>
       <div id="hud-selected" class="hud-block"></div>
       <div id="hud-actions" class="hud-block"></div>
-      <div id="hud-lines" class="hud-block"></div>
+      <div id="hud-network" class="hud-block"></div>
       <div id="hud-error" class="hud-error"></div>
-      <div class="hud-help">LMB: move/select, RMB: stop, M: map, Esc: close map</div>
+      <div class="hud-help">LMB: interact/move, RMB: stop, B: build mode, X: destroy mode, Esc: cancel, M: map</div>
     `;
 
     container.appendChild(this.root);
@@ -54,52 +64,41 @@ export class Hud {
     this.statusEl = this.root.querySelector("#hud-status") as HTMLElement;
     this.selectedEl = this.root.querySelector("#hud-selected") as HTMLElement;
     this.actionsEl = this.root.querySelector("#hud-actions") as HTMLElement;
-    this.linesEl = this.root.querySelector("#hud-lines") as HTMLElement;
+    this.networkEl = this.root.querySelector("#hud-network") as HTMLElement;
     this.errorEl = this.root.querySelector("#hud-error") as HTMLElement;
+
+    this.hoverTooltipEl = document.createElement("div");
+    this.hoverTooltipEl.className = "hud-hover-tooltip";
+    this.hoverTooltipEl.style.display = "none";
+    document.body.appendChild(this.hoverTooltipEl);
 
     this.root.addEventListener("click", this.onClick);
   }
 
   render(snapshot: WorldSnapshot): void {
+    this.lastSnapshot = snapshot;
+
     const currentTick = Number(snapshot.worldState?.currentTick ?? 0n);
     const myPlayer = snapshot.myPlayerId
       ? snapshot.players.find((player) => player.playerId === snapshot.myPlayerId) ?? null
       : null;
-
     const myCell = myPlayer ? playerCell(myPlayer) : { x: 0, y: 0 };
     const range = snapshot.worldConfig?.interactRangeCells ?? 0;
-    const recentEvents = snapshot.eventLog
-      .slice()
-      .sort((a, b) => {
-        if (a.tick !== b.tick) {
-          return a.tick > b.tick ? -1 : 1;
-        }
-        return b.id.localeCompare(a.id);
-      })
-      .slice(0, 5);
-    const recentEventsHtml =
-      recentEvents.length === 0
-        ? "<div class=\"hud-meta\">events: none</div>"
-        : recentEvents
-            .map((event) => {
-              const payload = event.payloadJson.length > 80
-                ? `${event.payloadJson.slice(0, 80)}...`
-                : event.payloadJson;
-              return `<div class="hud-meta">[${event.tick.toString()}] ${escapeHtml(
-                event.eventType,
-              )} ${escapeHtml(payload)}</div>`;
-            })
-            .join("");
+
+    const modeLabel =
+      this.selection.mode.kind === "default"
+        ? "default"
+        : this.selection.mode.kind === "destroyLine"
+          ? "destroy-line"
+          : `build-line (${this.selection.mode.step}${this.selection.mode.aId ? `:${this.selection.mode.aId}` : ""})`;
 
     this.statusEl.innerHTML = `
       <div><strong>id:</strong> ${snapshot.myPlayerId ?? "connecting..."}</div>
       <div><strong>tick:</strong> ${currentTick}</div>
-      <div><strong>ping:</strong> n/a</div>
       <div><strong>pos:</strong> ${myPlayer ? `${myCell.x.toFixed(2)}, ${myCell.y.toFixed(2)}` : "n/a"}</div>
       <div><strong>range:</strong> ${range}</div>
       <div><strong>generators:</strong> ${snapshot.generators.length}</div>
-      <div><strong>recent events:</strong></div>
-      ${recentEventsHtml}
+      <div><strong>mode:</strong> ${modeLabel}</div>
     `;
 
     const selected = this.selection.selectedGeneratorId
@@ -123,7 +122,13 @@ export class Hud {
       : `<div><strong>Selected Generator</strong></div><div>none</div>`;
 
     this.renderActions(snapshot, myPlayer, selected, dist, currentTick);
-    this.renderLines(snapshot);
+    this.renderNetwork(snapshot);
+    this.renderHoverTooltip();
+  }
+
+  setHoverGenerator(payload: HoverGeneratorPayload | null): void {
+    this.hoverPayload = payload;
+    this.renderHoverTooltip();
   }
 
   private renderActions(
@@ -147,90 +152,115 @@ export class Hud {
     const cooldownOk =
       myPlayer && BigInt(currentTick) >= myPlayer.rootMoveAvailableAtTick;
 
-    const placeRootVisible = Boolean(
+    const placeRootEnabled = Boolean(
       selected && myPlayer && isNeutralTarget && !hasRoot && inRange && !rootRelocation,
     );
-
-    const moveRootVisible = Boolean(
+    const moveRootEnabled = Boolean(
       selected && myPlayer && isNeutralTarget && hasRoot && inRange && cooldownOk && !rootRelocation,
     );
 
-    const setABEnabled = Boolean(selected);
+    const buildMode = this.selection.mode.kind === "buildLine";
+    const destroyMode = this.selection.mode.kind === "destroyLine";
+    const canSetLinePoint = Boolean(selected && buildMode);
 
-    const controlledGenerators = snapshot.generators.filter(
+    let hint = "";
+    if (buildMode) {
+      hint =
+        this.selection.mode.step === "pickA"
+          ? "Build mode: click generator A"
+          : `Build mode: click generator B (A=${this.selection.mode.aId ?? "?"})`;
+    } else if (destroyMode) {
+      hint = "Destroy mode: click a line segment";
+    } else if (!selected) {
+      hint = "Select a generator to see available actions";
+    } else if (!inRange) {
+      hint = "Selected generator is out of interact range";
+    } else if (rootRelocation) {
+      hint = "Root relocation in progress";
+    }
+
+    this.actionsEl.innerHTML = `
+      <div><strong>Actions</strong></div>
+      <div class="hud-row">
+        <button data-action="place-root" ${placeRootEnabled ? "" : "disabled"}>Place Root</button>
+        <button data-action="move-root" ${moveRootEnabled ? "" : "disabled"}>Move Root</button>
+      </div>
+      <div class="hud-row">
+        <button data-action="toggle-build-line">${buildMode ? "Build: ON" : "Build Line"}</button>
+        <button data-action="toggle-destroy-line">${destroyMode ? "Destroy: ON" : "Destroy Line"}</button>
+      </div>
+      <div class="hud-row">
+        <button data-action="set-a" ${canSetLinePoint ? "" : "disabled"}>Set as A</button>
+        <button data-action="set-b" ${canSetLinePoint ? "" : "disabled"}>Set as B</button>
+      </div>
+      <div class="hud-row">
+        <button data-action="cancel-mode" ${this.selection.mode.kind !== "default" ? "" : "disabled"}>Cancel (Esc)</button>
+      </div>
+      <div class="hud-meta">A=${this.selection.lineA ?? "-"}, B=${this.selection.lineB ?? "-"}</div>
+      <div class="hud-meta">${hint}</div>
+      ${rootRelocation ? `<div class="hud-meta">relocation: ${rootRelocation.fromGeneratorId} -> ${rootRelocation.toGeneratorId}</div>` : ""}
+    `;
+  }
+
+  private renderNetwork(snapshot: WorldSnapshot): void {
+    const controlled = snapshot.generators.filter(
       (generator) =>
         snapshot.myPlayerId !== null &&
         generator.ownerPlayerId === snapshot.myPlayerId &&
         generator.state === "controlled",
     );
-    const controlledSet = new Set(controlledGenerators.map((generator) => generator.id));
+    const maxLines = getMaxLines(controlled.length);
     const myLines = snapshot.lines.filter(
       (line) => snapshot.myPlayerId !== null && line.ownerPlayerId === snapshot.myPlayerId,
     );
+    const overheated = myLines.filter((line) => line.overheated).length;
+    const cooling = myLines.filter((line) => !line.active && !line.overheated).length;
 
-    const lineA = this.selection.lineA;
-    const lineB = this.selection.lineB;
-    const hasAB = Boolean(lineA && lineB);
-    const bothControlled = Boolean(lineA && lineB && controlledSet.has(lineA) && controlledSet.has(lineB));
-    const lineExists = Boolean(
-      lineA &&
-        lineB &&
-        myLines.some((line) => normalizedLineKey(line.aGeneratorId, line.bGeneratorId) === normalizedLineKey(lineA, lineB)),
-    );
-    const maxLines = getMaxLines(controlledGenerators.length);
-    const buildEnabled = Boolean(
-      hasAB &&
-        lineA !== lineB &&
-        bothControlled &&
-        myLines.length < maxLines &&
-        !lineExists &&
-        !rootRelocation,
-    );
-
-    this.actionsEl.innerHTML = `
-      <div><strong>Actions</strong></div>
-      <div class="hud-row">
-        <button data-action="place-root" ${placeRootVisible ? "" : "disabled"}>Place Root</button>
-        <button data-action="move-root" ${moveRootVisible ? "" : "disabled"}>Move Root</button>
-      </div>
-      <div class="hud-row">
-        <button data-action="set-a" ${setABEnabled ? "" : "disabled"}>Set A</button>
-        <button data-action="set-b" ${setABEnabled ? "" : "disabled"}>Set B</button>
-      </div>
-      <div class="hud-row">
-        <button data-action="build-line" ${buildEnabled ? "" : "disabled"}>Build Line</button>
-      </div>
-      <div class="hud-meta">A=${lineA ?? "-"}, B=${lineB ?? "-"}</div>
-      <div class="hud-meta">lines ${myLines.length}/${maxLines}</div>
-      ${rootRelocation ? `<div class="hud-meta">relocation: ${rootRelocation.fromGeneratorId} -> ${rootRelocation.toGeneratorId}</div>` : ""}
+    this.networkEl.innerHTML = `
+      <div><strong>Network</strong></div>
+      <div>controlled generators: ${controlled.length}</div>
+      <div>lines: ${myLines.length}/${maxLines}</div>
+      <div>overheated lines: ${overheated}</div>
+      <div>cooldown lines: ${cooling}</div>
     `;
   }
 
-  private renderLines(snapshot: WorldSnapshot): void {
-    const myLines = snapshot.lines
-      .filter((line) => snapshot.myPlayerId !== null && line.ownerPlayerId === snapshot.myPlayerId)
-      .sort((a, b) => a.id.localeCompare(b.id));
-
-    if (myLines.length === 0) {
-      this.linesEl.innerHTML = `<div><strong>My Lines</strong></div><div>none</div>`;
+  private renderHoverTooltip(): void {
+    const snapshot = this.lastSnapshot;
+    const hover = this.hoverPayload;
+    if (!snapshot || !hover) {
+      this.hoverTooltipEl.style.display = "none";
       return;
     }
 
-    const rows = myLines
-      .map(
-        (line) => `
-        <div class="hud-line-row">
-          <div class="hud-line-text">${line.aGeneratorId} <-> ${line.bGeneratorId}</div>
-          <button data-action="destroy-line" data-line-id="${line.id}">Destroy</button>
-        </div>
-      `,
-      )
-      .join("");
+    const generator =
+      snapshot.generators.find((item) => item.id === hover.generatorId) ?? null;
+    if (!generator) {
+      this.hoverTooltipEl.style.display = "none";
+      return;
+    }
 
-    this.linesEl.innerHTML = `<div><strong>My Lines</strong></div>${rows}`;
+    const myPlayer = snapshot.myPlayerId
+      ? snapshot.players.find((player) => player.playerId === snapshot.myPlayerId) ?? null
+      : null;
+    const myCell = myPlayer ? playerCell(myPlayer) : null;
+    const dist = myCell
+      ? Math.hypot(generator.x - myCell.x, generator.y - myCell.y)
+      : null;
+
+    this.hoverTooltipEl.innerHTML = `
+      <div><strong>${escapeHtml(generator.id)}</strong></div>
+      <div>state: ${escapeHtml(generator.state)}</div>
+      <div>owner: ${escapeHtml(generator.ownerPlayerId || "none")}</div>
+      <div>connected: ${generator.isConnected}</div>
+      <div>dist: ${dist === null ? "n/a" : dist.toFixed(2)}</div>
+    `;
+    this.hoverTooltipEl.style.display = "block";
+    this.hoverTooltipEl.style.left = `${Math.round(hover.screenX + 14)}px`;
+    this.hoverTooltipEl.style.top = `${Math.round(hover.screenY + 14)}px`;
   }
 
-  private onClick = (event: MouseEvent): void => {
+  private onClick = async (event: MouseEvent): Promise<void> => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
 
@@ -243,37 +273,48 @@ export class Hud {
       if (action === "place-root") {
         const generatorId = this.selection.selectedGeneratorId;
         if (!generatorId) return;
-        this.net.placeRoot(generatorId);
+        await this.net.placeRoot(generatorId);
         return;
       }
 
       if (action === "move-root") {
         const generatorId = this.selection.selectedGeneratorId;
         if (!generatorId) return;
-        this.net.startMoveRoot(generatorId);
+        await this.net.startMoveRoot(generatorId);
+        return;
+      }
+
+      if (action === "toggle-build-line") {
+        this.selection.toggleBuildLineMode();
+        return;
+      }
+
+      if (action === "toggle-destroy-line") {
+        this.selection.toggleDestroyLineMode();
+        return;
+      }
+
+      if (action === "cancel-mode") {
+        this.selection.cancelMode();
         return;
       }
 
       if (action === "set-a") {
-        this.selection.setLineA(this.selection.selectedGeneratorId);
+        const selectedId = this.selection.selectedGeneratorId;
+        if (!selectedId) return;
+        this.selection.setBuildLinePickB(selectedId);
         return;
       }
 
       if (action === "set-b") {
-        this.selection.setLineB(this.selection.selectedGeneratorId);
+        const selectedId = this.selection.selectedGeneratorId;
+        if (!selectedId) return;
+        if (this.selection.mode.kind !== "buildLine") return;
+        const aId = this.selection.mode.aId;
+        if (!aId || aId === selectedId) return;
+        await this.net.buildLine(aId, selectedId);
+        this.selection.cancelMode();
         return;
-      }
-
-      if (action === "build-line") {
-        if (!this.selection.lineA || !this.selection.lineB) return;
-        this.net.buildLine(this.selection.lineA, this.selection.lineB);
-        return;
-      }
-
-      if (action === "destroy-line") {
-        const lineId = target.dataset.lineId;
-        if (!lineId) return;
-        this.net.destroyLine(lineId);
       }
     } catch (error) {
       this.errorEl.textContent =

@@ -4,6 +4,7 @@ import { Input } from "./Input";
 import { Interpolation } from "./Interpolation";
 import { Selection } from "./Selection";
 import { WorldRenderer } from "./WorldRenderer";
+import { loadTextures } from "./Assets";
 import { NetClient, type WorldSnapshot } from "../net/NetClient";
 import { Hud } from "../ui/Hud";
 import { MapOverlay } from "../ui/MapOverlay";
@@ -68,6 +69,7 @@ export class GameApp {
     });
     canvasWrap.appendChild(this.app.canvas);
 
+    await loadTextures();
     this.renderer = new WorldRenderer(this.app);
     this.camera = new Camera(this.renderer.layers.worldContainer);
     this.interpolation = new Interpolation();
@@ -85,6 +87,7 @@ export class GameApp {
       isMapOpen: () => this.mapOverlay.isOpen(),
       toggleMap: () => this.mapOverlay.toggle(),
       closeMap: () => this.mapOverlay.close(),
+      setHoverGenerator: (payload) => this.hud.setHoverGenerator(payload),
     });
 
     this.net.onStoreChanged(() => {

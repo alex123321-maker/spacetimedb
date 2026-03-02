@@ -1,13 +1,9 @@
-import { Application, Graphics } from "pixi.js";
+import { Application, Graphics, Sprite } from "pixi.js";
+import type { Generator } from "../module_bindings/types";
 import type { WorldSnapshot } from "../net/NetClient";
 import { Layers } from "./Layers";
-import {
-  COLORS,
-  drawGenerator,
-  drawLines,
-  drawPlayer,
-  getJunkColor,
-} from "./Sprites";
+import { getJunkTextureCount, getTexture } from "./Assets";
+import { COLORS, drawLines } from "./Sprites";
 
 const DEFAULT_TILE_SIZE = 32;
 const DEFAULT_WORLD_WIDTH = 128;
@@ -18,27 +14,37 @@ export class WorldRenderer {
   readonly layers: Layers;
 
   private readonly bgGraphics = new Graphics();
-  private readonly obstacleGraphics = new Graphics();
-  private readonly junkGraphics = new Graphics();
   private readonly lineGraphics = new Graphics();
 
-  private readonly generatorSprites = new Map<string, Graphics>();
-  private readonly playerSprites = new Map<string, Graphics>();
-  private readonly playerSelfState = new Map<string, boolean>();
+  private readonly obstacleSprites = new Map<string, Sprite>();
+  private readonly junkSprites = new Map<string, Sprite>();
+  private readonly junkTextureKeys = new Map<string, string>();
+  private readonly generatorSprites = new Map<string, Sprite>();
+  private readonly generatorGlowSprites = new Map<string, Sprite>();
+  private readonly generatorTextureKeys = new Map<string, string>();
+  private readonly playerSprites = new Map<string, Sprite>();
+
+  private readonly targetMarker = new Sprite(getTexture("target"));
+  private readonly selectionRing = new Sprite(getTexture("selection"));
 
   private lastBgKey = "";
-  private lastObstacleVersion = -1;
-  private lastJunkVersion = -1;
-  private lastTileSize = -1;
 
   constructor(private readonly app: Application) {
     this.layers = new Layers();
     this.app.stage.addChild(this.layers.worldContainer);
 
     this.layers.bgLayer.addChild(this.bgGraphics);
-    this.layers.obstacleLayer.addChild(this.obstacleGraphics);
-    this.layers.junkLayer.addChild(this.junkGraphics);
     this.layers.lineLayer.addChild(this.lineGraphics);
+
+    this.targetMarker.anchor.set(0.5);
+    this.targetMarker.tint = 0xffb85c;
+    this.targetMarker.visible = false;
+    this.layers.overlayLayer.addChild(this.targetMarker);
+
+    this.selectionRing.anchor.set(0.5);
+    this.selectionRing.tint = 0xaee8ff;
+    this.selectionRing.visible = false;
+    this.layers.overlayLayer.addChild(this.selectionRing);
   }
 
   getTileSize(snapshot: WorldSnapshot): number {
@@ -58,22 +64,11 @@ export class WorldRenderer {
     if (bgKey !== this.lastBgKey) {
       this.drawBackground(worldWidth, worldHeight, tileSize);
       this.lastBgKey = bgKey;
-      this.lastTileSize = tileSize;
-      this.lastObstacleVersion = -1;
-      this.lastJunkVersion = -1;
     }
 
-    if (this.lastObstacleVersion !== snapshot.versions.obstacle || this.lastTileSize !== tileSize) {
-      this.drawObstacles(snapshot, tileSize);
-      this.lastObstacleVersion = snapshot.versions.obstacle;
-    }
-
-    if (this.lastJunkVersion !== snapshot.versions.junk || this.lastTileSize !== tileSize) {
-      this.drawJunk(snapshot, tileSize);
-      this.lastJunkVersion = snapshot.versions.junk;
-    }
-
-    this.drawGenerators(snapshot, tileSize, selectedGeneratorId);
+    this.syncObstacles(snapshot, tileSize);
+    this.syncJunk(snapshot, tileSize);
+    this.drawGenerators(snapshot, tileSize);
     this.drawPlayers(snapshot, tileSize, interpolatedPlayerPx);
     drawLines(
       this.lineGraphics,
@@ -81,6 +76,8 @@ export class WorldRenderer {
       new Map(snapshot.generators.map((generator) => [generator.id, generator])),
       tileSize,
     );
+    this.updateTargetMarker(snapshot, tileSize);
+    this.updateSelectionRing(snapshot, selectedGeneratorId, tileSize);
   }
 
   private drawBackground(worldWidth: number, worldHeight: number, tileSize: number): void {
@@ -109,52 +106,128 @@ export class WorldRenderer {
     }
   }
 
-  private drawObstacles(snapshot: WorldSnapshot, tileSize: number): void {
-    this.obstacleGraphics.clear();
+  private syncObstacles(snapshot: WorldSnapshot, tileSize: number): void {
+    const live = new Set<string>();
+
     for (const obstacle of snapshot.obstacles) {
-      this.obstacleGraphics
-        .rect(obstacle.x * tileSize, obstacle.y * tileSize, tileSize, tileSize)
-        .fill({ color: COLORS.obstacle });
+      live.add(obstacle.id);
+
+      let sprite = this.obstacleSprites.get(obstacle.id);
+      if (!sprite) {
+        sprite = new Sprite(getTexture("obstacle"));
+        sprite.anchor.set(0.5);
+        this.obstacleSprites.set(obstacle.id, sprite);
+        this.layers.obstacleLayer.addChild(sprite);
+      }
+
+      this.fitSpriteToTile(sprite, tileSize);
+      sprite.position.set(
+        (obstacle.x + 0.5) * tileSize,
+        (obstacle.y + 0.5) * tileSize,
+      );
+    }
+
+    for (const [obstacleId, sprite] of this.obstacleSprites.entries()) {
+      if (live.has(obstacleId)) continue;
+      this.layers.obstacleLayer.removeChild(sprite);
+      this.obstacleSprites.delete(obstacleId);
+      sprite.destroy();
     }
   }
 
-  private drawJunk(snapshot: WorldSnapshot, tileSize: number): void {
-    this.junkGraphics.clear();
-    const pad = tileSize * 0.24;
-    const size = tileSize - pad * 2;
+  private syncJunk(snapshot: WorldSnapshot, tileSize: number): void {
+    const live = new Set<string>();
+    const junkTextureCount = Math.max(1, getJunkTextureCount());
+
     for (const junk of snapshot.junk) {
-      this.junkGraphics
-        .rect(junk.x * tileSize + pad, junk.y * tileSize + pad, size, size)
-        .fill({ color: getJunkColor(junk.kind) });
+      live.add(junk.id);
+
+      const textureKey = `junk_${Math.abs(junk.kind) % junkTextureCount}`;
+      let sprite = this.junkSprites.get(junk.id);
+      if (!sprite) {
+        sprite = new Sprite(getTexture(textureKey));
+        sprite.anchor.set(0.5);
+        this.junkSprites.set(junk.id, sprite);
+        this.junkTextureKeys.set(junk.id, textureKey);
+        this.layers.junkLayer.addChild(sprite);
+      } else if (this.junkTextureKeys.get(junk.id) !== textureKey) {
+        sprite.texture = getTexture(textureKey);
+        this.junkTextureKeys.set(junk.id, textureKey);
+      }
+
+      this.fitSpriteToTile(sprite, tileSize);
+      sprite.position.set((junk.x + 0.5) * tileSize, (junk.y + 0.5) * tileSize);
+    }
+
+    for (const [junkId, sprite] of this.junkSprites.entries()) {
+      if (live.has(junkId)) continue;
+      this.layers.junkLayer.removeChild(sprite);
+      this.junkSprites.delete(junkId);
+      this.junkTextureKeys.delete(junkId);
+      sprite.destroy();
     }
   }
 
-  private drawGenerators(
-    snapshot: WorldSnapshot,
-    tileSize: number,
-    selectedGeneratorId: string | null,
-  ): void {
+  private drawGenerators(snapshot: WorldSnapshot, tileSize: number): void {
     const live = new Set<string>();
 
     for (const generator of snapshot.generators) {
       live.add(generator.id);
 
+      const textureKey = this.getGeneratorTextureKey(generator);
       let sprite = this.generatorSprites.get(generator.id);
       if (!sprite) {
-        sprite = new Graphics();
+        sprite = new Sprite(getTexture(textureKey));
+        sprite.anchor.set(0.5);
         this.generatorSprites.set(generator.id, sprite);
+        this.generatorTextureKeys.set(generator.id, textureKey);
         this.layers.generatorLayer.addChild(sprite);
+      } else if (this.generatorTextureKeys.get(generator.id) !== textureKey) {
+        sprite.texture = getTexture(textureKey);
+        this.generatorTextureKeys.set(generator.id, textureKey);
       }
 
-      drawGenerator(sprite, tileSize, generator, selectedGeneratorId === generator.id);
-      sprite.position.set(generator.x * tileSize, generator.y * tileSize);
+      let glow = this.generatorGlowSprites.get(generator.id);
+      if (generator.isConnected) {
+        if (!glow) {
+          glow = new Sprite(getTexture("selection"));
+          glow.anchor.set(0.5);
+          glow.tint = 0x77ffb0;
+          glow.alpha = 0.35;
+          this.generatorGlowSprites.set(generator.id, glow);
+          this.layers.generatorLayer.addChild(glow);
+        }
+        this.fitSpriteToTile(glow, tileSize, 1.45);
+        glow.position.set(
+          (generator.x + 0.5) * tileSize,
+          (generator.y + 0.5) * tileSize,
+        );
+      } else if (glow) {
+        this.layers.generatorLayer.removeChild(glow);
+        this.generatorGlowSprites.delete(generator.id);
+        glow.destroy();
+      }
+
+      this.fitSpriteToTile(sprite, tileSize);
+      sprite.position.set(
+        (generator.x + 0.5) * tileSize,
+        (generator.y + 0.5) * tileSize,
+      );
     }
 
     for (const [generatorId, sprite] of this.generatorSprites.entries()) {
       if (live.has(generatorId)) continue;
       this.layers.generatorLayer.removeChild(sprite);
       this.generatorSprites.delete(generatorId);
+      this.generatorTextureKeys.delete(generatorId);
       sprite.destroy();
+
+      const glow = this.generatorGlowSprites.get(generatorId);
+      if (glow) {
+        this.layers.generatorLayer.removeChild(glow);
+        this.generatorGlowSprites.delete(generatorId);
+        glow.destroy();
+      }
     }
   }
 
@@ -170,16 +243,10 @@ export class WorldRenderer {
 
       let sprite = this.playerSprites.get(player.playerId);
       if (!sprite) {
-        sprite = new Graphics();
+        sprite = new Sprite(getTexture("player"));
+        sprite.anchor.set(0.5);
         this.playerSprites.set(player.playerId, sprite);
         this.layers.playerLayer.addChild(sprite);
-      }
-
-      const isSelf = snapshot.myPlayerId === player.playerId;
-      const lastSelfState = this.playerSelfState.get(player.playerId);
-      if (lastSelfState !== isSelf || this.lastTileSize !== tileSize) {
-        drawPlayer(sprite, tileSize, isSelf);
-        this.playerSelfState.set(player.playerId, isSelf);
       }
 
       const interpolated = interpolatedPlayerPx.get(player.playerId);
@@ -187,15 +254,70 @@ export class WorldRenderer {
       const fallbackY = (Number(player.posY) / FIXED_SCALE) * tileSize;
       const positionX = interpolated?.x ?? fallbackX;
       const positionY = interpolated?.y ?? fallbackY;
-      sprite.position.set(positionX, positionY);
+      this.fitSpriteToTile(sprite, tileSize);
+      sprite.position.set(positionX + tileSize * 0.5, positionY + tileSize * 0.5);
     }
 
     for (const [playerId, sprite] of this.playerSprites.entries()) {
       if (live.has(playerId)) continue;
       this.layers.playerLayer.removeChild(sprite);
       this.playerSprites.delete(playerId);
-      this.playerSelfState.delete(playerId);
       sprite.destroy();
     }
+  }
+
+  private getGeneratorTextureKey(generator: Generator): string {
+    if (generator.isConnected) return "gen_connected";
+    if (generator.state === "controlled") return "gen_controlled";
+    if (generator.state === "isolated") return "gen_isolated";
+    return "gen_neutral";
+  }
+
+  private updateTargetMarker(snapshot: WorldSnapshot, tileSize: number): void {
+    const myPlayer = snapshot.myPlayerId
+      ? snapshot.players.find((player) => player.playerId === snapshot.myPlayerId) ?? null
+      : null;
+
+    if (!myPlayer || !myPlayer.moving) {
+      this.targetMarker.visible = false;
+      return;
+    }
+
+    this.targetMarker.visible = true;
+    this.fitSpriteToTile(this.targetMarker, tileSize, 1.1);
+    this.targetMarker.position.set(
+      (Number(myPlayer.targetPosX) / FIXED_SCALE) * tileSize + tileSize * 0.5,
+      (Number(myPlayer.targetPosY) / FIXED_SCALE) * tileSize + tileSize * 0.5,
+    );
+  }
+
+  private updateSelectionRing(
+    snapshot: WorldSnapshot,
+    selectedGeneratorId: string | null,
+    tileSize: number,
+  ): void {
+    if (!selectedGeneratorId) {
+      this.selectionRing.visible = false;
+      return;
+    }
+
+    const selected = snapshot.generators.find((generator) => generator.id === selectedGeneratorId);
+    if (!selected) {
+      this.selectionRing.visible = false;
+      return;
+    }
+
+    this.selectionRing.visible = true;
+    this.fitSpriteToTile(this.selectionRing, tileSize, 1.15);
+    this.selectionRing.position.set(
+      (selected.x + 0.5) * tileSize,
+      (selected.y + 0.5) * tileSize,
+    );
+  }
+
+  private fitSpriteToTile(sprite: Sprite, tileSize: number, multiplier = 1): void {
+    const baseSize = Math.max(1, Math.max(sprite.texture.width, sprite.texture.height));
+    const scale = (tileSize / baseSize) * multiplier;
+    sprite.scale.set(scale);
   }
 }

@@ -24,7 +24,7 @@ const DB_NAME =
 
 const FIXED_SCALE = 1000;
 
-type ReducerMap = Record<string, (args?: unknown) => unknown>;
+type ReducerMap = Record<string, (args?: unknown) => Promise<void>>;
 type Listener = () => void;
 
 type VersionKey =
@@ -150,7 +150,9 @@ export class NetClient {
           this.myPlayerId = identity.toHexString();
 
           this.attachTableListeners(conn);
-          this.callReducer(["joinPlayer", "join_player"]);
+          this.callReducer(["joinPlayer", "join_player"]).catch((error) => {
+            console.error("joinPlayer failed:", error);
+          });
 
           conn
             .subscriptionBuilder()
@@ -212,34 +214,34 @@ export class NetClient {
     };
   }
 
-  setMoveTarget(cellX: number, cellY: number): void {
-    this.callReducer(["setMoveTarget", "set_move_target"], {
-      cellX: Math.trunc(cellX),
-      cellY: Math.trunc(cellY),
+  setMoveTarget(targetPosX: bigint, targetPosY: bigint): Promise<void> {
+    return this.callReducer(["setMoveTarget", "set_move_target"], {
+      targetPosX,
+      targetPosY,
     });
   }
 
-  stopMove(): void {
-    this.callReducer(["stopMove", "stop_move"]);
+  stopMove(): Promise<void> {
+    return this.callReducer(["stopMove", "stop_move"]);
   }
 
-  placeRoot(generatorId: string): void {
-    this.callReducer(["placeRoot", "place_root"], { generatorId });
+  placeRoot(generatorId: string): Promise<void> {
+    return this.callReducer(["placeRoot", "place_root"], { generatorId });
   }
 
-  startMoveRoot(newGeneratorId: string): void {
-    this.callReducer(["startMoveRoot", "start_move_root"], { newGeneratorId });
+  startMoveRoot(newGeneratorId: string): Promise<void> {
+    return this.callReducer(["startMoveRoot", "start_move_root"], { newGeneratorId });
   }
 
-  buildLine(aGeneratorId: string, bGeneratorId: string): void {
-    this.callReducer(["buildLine", "build_line"], {
+  buildLine(aGeneratorId: string, bGeneratorId: string): Promise<void> {
+    return this.callReducer(["buildLine", "build_line"], {
       aGeneratorId,
       bGeneratorId,
     });
   }
 
-  destroyLine(lineId: string): void {
-    this.callReducer(["destroyLine", "destroy_line"], { lineId });
+  destroyLine(lineId: string): Promise<void> {
+    return this.callReducer(["destroyLine", "destroy_line"], { lineId });
   }
 
   private attachTableListeners(conn: DbConnection): void {
@@ -380,7 +382,7 @@ export class NetClient {
     });
   }
 
-  private callReducer(names: string[], args?: unknown): void {
+  private callReducer(names: string[], args?: unknown): Promise<void> {
     if (!this.conn) {
       throw new Error("Not connected");
     }
@@ -390,12 +392,14 @@ export class NetClient {
       const reducer = reducers[name];
       if (typeof reducer !== "function") continue;
       if (args === undefined) {
-        reducer();
+        const promise = reducer();
+        this.seq += 1;
+        return promise;
       } else {
-        reducer(args);
+        const promise = reducer(args);
+        this.seq += 1;
+        return promise;
       }
-      this.seq += 1;
-      return;
     }
 
     throw new Error(`Reducer not found. Tried: ${names.join(", ")}`);

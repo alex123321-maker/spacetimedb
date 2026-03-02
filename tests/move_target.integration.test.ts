@@ -3,6 +3,7 @@ import { DbConnection, tables } from "../client/module_bindings";
 
 const shouldRun = process.env.RUN_SPACETIMEDB_INTEGRATION === "1";
 type ReducerMap = Record<string, (args?: unknown) => unknown>;
+const FIXED_SCALE = 1000n;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,6 +40,10 @@ function callReducer(conn: DbConnection, names: string[], args?: unknown): void 
     return;
   }
   throw new Error(`Reducer not found: ${names.join(", ")}`);
+}
+
+function centerFixed(cell: number): bigint {
+  return BigInt(cell) * FIXED_SCALE + FIXED_SCALE / 2n;
 }
 
 function getPlayer(conn: DbConnection, playerId: string): Record<string, unknown> {
@@ -113,8 +118,8 @@ describe("SpacetimeDB move target integration", () => {
       const beforeDistance = manhattanDistance(before, targetX, targetY);
 
       callReducer(conn, ["setMoveTarget", "set_move_target"], {
-        cellX: targetX,
-        cellY: targetY,
+        targetPosX: centerFixed(targetX),
+        targetPosY: centerFixed(targetY),
       });
 
       const startTick = getCurrentTick(conn);
@@ -126,8 +131,8 @@ describe("SpacetimeDB move target integration", () => {
       expect(afterDistance).toBeLessThan(beforeDistance);
 
       const beforeBlockedTarget = {
-        targetX: readNumber(afterMove, "targetX", "target_x"),
-        targetY: readNumber(afterMove, "targetY", "target_y"),
+        targetPosX: readBigInt(afterMove, "targetPosX", "target_pos_x"),
+        targetPosY: readBigInt(afterMove, "targetPosY", "target_pos_y"),
       };
       const obstacleRows = Array.from(conn.db.obstacle.iter()) as Array<
         Record<string, unknown>
@@ -138,8 +143,8 @@ describe("SpacetimeDB move target integration", () => {
       expect(obstacleRows.length).toBeGreaterThan(0);
       try {
         callReducer(conn, ["setMoveTarget", "set_move_target"], {
-          cellX: obstacleX,
-          cellY: obstacleY,
+          targetPosX: centerFixed(obstacleX),
+          targetPosY: centerFixed(obstacleY),
         });
       } catch {
         // Reducer can throw synchronously on validation failures.
@@ -147,14 +152,23 @@ describe("SpacetimeDB move target integration", () => {
       await wait(150);
 
       const afterBlockedAttempt = getPlayer(conn, playerId);
-      const blockedTargetX = readNumber(afterBlockedAttempt, "targetX", "target_x");
-      const blockedTargetY = readNumber(afterBlockedAttempt, "targetY", "target_y");
+      const blockedTargetPosX = readBigInt(
+        afterBlockedAttempt,
+        "targetPosX",
+        "target_pos_x",
+      );
+      const blockedTargetPosY = readBigInt(
+        afterBlockedAttempt,
+        "targetPosY",
+        "target_pos_y",
+      );
       expect(
-        blockedTargetX === obstacleX && blockedTargetY === obstacleY,
+        blockedTargetPosX === centerFixed(obstacleX) &&
+          blockedTargetPosY === centerFixed(obstacleY),
       ).toBeFalsy();
       expect(
-        blockedTargetX === beforeBlockedTarget.targetX &&
-          blockedTargetY === beforeBlockedTarget.targetY,
+        blockedTargetPosX === beforeBlockedTarget.targetPosX &&
+          blockedTargetPosY === beforeBlockedTarget.targetPosY,
       ).toBeTruthy();
     },
     20_000,

@@ -11,6 +11,7 @@ export const COLORS = {
   junk3: 0x3498db,
   line: 0x8ecae6,
   lineHot: 0xe74c3c,
+  lineCooldown: 0xf4a261,
   playerSelfFill: 0x2ecc71,
   playerSelfStroke: 0xd5f9de,
   playerOtherFill: 0xf1c40f,
@@ -98,13 +99,20 @@ export function drawLines(
     const b = generatorsById.get(line.bGeneratorId);
     if (!a || !b) continue;
 
-    const color = line.active && !line.overheated ? COLORS.line : COLORS.lineHot;
-    const width = Math.max(2, tileSize * 0.18);
+    const color = line.overheated
+      ? COLORS.lineHot
+      : line.active
+        ? COLORS.line
+        : COLORS.lineCooldown;
+    const width = line.overheated
+      ? Math.max(3, tileSize * 0.22)
+      : Math.max(2, tileSize * 0.18);
+    const alpha = line.overheated ? 0.95 : line.active ? 0.92 : 0.45;
     const ax = (a.x + 0.5) * tileSize;
     const ay = (a.y + 0.5) * tileSize;
     const bx = (b.x + 0.5) * tileSize;
     const by = (b.y + 0.5) * tileSize;
 
-    graphics.moveTo(ax, ay).lineTo(bx, by).stroke({ color, width, alpha: 0.92 });
+    graphics.moveTo(ax, ay).lineTo(bx, by).stroke({ color, width, alpha });
   }
 }
